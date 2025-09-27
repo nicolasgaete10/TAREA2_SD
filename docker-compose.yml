@@ -1,0 +1,51 @@
+services:
+  # Base de datos para almacenamiento persistente
+  postgres:
+    image: postgres:13
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: yahoo_answers
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # Sistema de caché en memoria
+  redis:
+    image: redis:6-alpine
+    container_name: redis_cache
+    # Para experimentar, puedes pasar comandos para cambiar la política
+    # command: redis-server --maxmemory 100mb --maxmemory-policy lru
+    ports:
+      - "6379:6379"
+
+  # Servicio que se conecta al LLM y la BD
+  score_service:
+    build: ./score_service
+    container_name: score_service
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres_db:5432/yahoo_answers
+      - REDIS_URL=redis://redis_cache:6379
+      - GEMINI_API_KEY=TU_API_KEY_AQUI
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "5001:5001"
+
+  # Servicio que simula el tráfico de usuarios
+  traffic_generator:
+    build: ./traffic_generator
+    container_name: traffic_generator
+    environment:
+      - SCORE_SERVICE_URL=http://score_service:5001/process
+      - DATASET_PATH=/app/data/train.csv
+    volumes:
+      - ./data:/app/data # Mapea el dataset al contenedor
+    depends_on:
+      - score_service
+
+volumes:
+  postgres_data:
