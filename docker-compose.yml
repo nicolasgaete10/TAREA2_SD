@@ -29,6 +29,9 @@ services:
       - DATABASE_URL=postgresql://user:password@postgres_db:5432/yahoo_answers
       - REDIS_URL=redis://redis_cache:6379
       - GEMINI_API_KEY=${Clave_GEMINI_API_KEY}
+      - DATASET_PATH=/app/Data/test.csv
+    volumes:
+      - ./Data:/app/Data
     depends_on:
       - postgres
       - redis
@@ -41,9 +44,9 @@ services:
     container_name: traffic_generator
     environment:
       - SCORE_SERVICE_URL=http://score_service:5001/process
-      - DATASET_PATH=/app/data/train.csv
+      - DATASET_PATH=/app/Data/test.csv
     volumes:
-      - ./data:/app/data # Mapea el dataset al contenedor
+      - ./Data:/app/Data 
     depends_on:
       - score_service
 

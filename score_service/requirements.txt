@@ -1,7 +1,10 @@
 Flask==2.3.2
 requests
+rouge-score
+pandas
 psycopg2-binary  # Driver para PostgreSQL
 redis          # Cliente para Redis
-google-generativeai # API de Gemini
+google-genai # API de Gemini
 # Para el score (ejemplo):
 sentence-transformers
+pandas
