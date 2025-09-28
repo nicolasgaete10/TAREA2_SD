@@ -28,7 +28,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@postgres_db:5432/yahoo_answers
       - REDIS_URL=redis://redis_cache:6379
-      - GEMINI_API_KEY=TU_API_KEY_AQUI
+      - GEMINI_API_KEY=${Clave_GEMINI_API_KEY}
     depends_on:
       - postgres
       - redis
