@@ -63,17 +63,7 @@ def initialize_database():
         print(f"Error creando tabla: {e}")
         return None
 
-def get_redis_client():
-    """Configura y retorna cliente Redis"""
-    try:
-        redis_url = os.environ.get("REDIS_URL", "redis://redis_cache:6379")
-        redis_client = redis.from_url(redis_url)
-        redis_client.ping()  
-        print("Conexión a Redis exitosa.")
-        return redis_client
-    except Exception as e:
-        print(f"Error conectando a Redis: {e}")
-        return None
+
 
 def get_gemini_client():
     """Configura y retorna cliente Gemini con la nueva API"""
@@ -219,7 +209,6 @@ def get_reference_answer(question: str) -> str:
 
 # --- Inicialización de componentes ---
 db_connection = initialize_database()
-redis_client = get_redis_client()
 gemini_client = get_gemini_client()
 score_calculator = ScoreCalculator()
 
@@ -234,7 +223,6 @@ def health_check():
     """Endpoint para verificar estado del servicio"""
     components = {
         "database": db_connection is not None,
-        "redis": redis_client is not None,
         "gemini": gemini_client is not None
     }
     return jsonify({"status": "healthy", "components": components})
@@ -252,25 +240,7 @@ def process_question():
 
     logger.info(f"Pregunta recibida: '{question_text[:60]}...'")
 
-    # 1. VERIFICAR CACHÉ
-    cache_key = f"answer:{question_text}"
-    if redis_client:
-        try:
-            cached_answer = redis_client.get(cache_key)
-            if cached_answer:
-                logger.info("Respuesta encontrada en caché")
-                # Incrementar contador en base de datos
-                increment_request_count(question_text)
-                return jsonify({
-                    "status": "success",
-                    "source": "cache",
-                    "answer": cached_answer.decode('utf-8'),
-                    "question": question_text
-                })
-        except Exception as e:
-            logger.error(f"Error accediendo a Redis: {e}")
-
-    # 2. CACHE MISS - PROCESAR CON LLM
+    
     try:
         # Obtener respuesta de referencia
         reference_answer = get_reference_answer(question_text)
@@ -300,10 +270,6 @@ def process_question():
         quality_score = score_calculator.calculate_score(llm_answer, reference_answer)
         logger.info(f"Score de calidad calculado: {quality_score}")
         
-        # 4. GUARDAR EN CACHÉ Y BASE DE DATOS
-        if redis_client:
-            redis_client.setex(cache_key, 3600, llm_answer)  # Cache por 1 hora
-        
         save_to_database(question_text, reference_answer, llm_answer, quality_score)
         
         # 5. RETORNAR RESPUESTA
@@ -313,7 +279,6 @@ def process_question():
             "answer": llm_answer,
             "quality_score": quality_score,
             "question": question_text,
-            "cache_key": cache_key
         })
         
     except Exception as e:
@@ -323,22 +288,7 @@ def process_question():
 def generate_mock_response(question_text: str) -> str:
     return f"Respuesta simulada para: {question_text}"
 
-def increment_request_count(question_text: str):
-    """Incrementa el contador de requests para una pregunta"""
-    if not db_connection:
-        return
-    
-    try:
-        cur = db_connection.cursor()
-        cur.execute("""
-            UPDATE qa_responses 
-            SET request_count = request_count + 1, updated_at = NOW()
-            WHERE question_text = %s
-        """, (question_text,))
-        db_connection.commit()
-        cur.close()
-    except Exception as e:
-        logger.error(f"Error incrementando contador: {e}")
+
 
 def save_to_database(question_text: str, original_answer: str, llm_answer: str, quality_score: float):
     """Guarda la pregunta y respuestas en la base de datos"""

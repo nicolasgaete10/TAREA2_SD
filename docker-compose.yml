@@ -20,6 +20,10 @@ services:
     container_name: redis_cache
     ports:
       - "6379:6379"
+    command:
+      - redis-server
+      - --maxmemory 256mb # Limita la memoria a 256MB
+      - --maxmemory-policy allkeys-lru # Política LRU para la gestión de memoria CACHE
 
   # Servicio que se conecta al LLM y la BD
   score_service:
@@ -27,7 +31,7 @@ services:
     container_name: score_service
     environment:
       - DATABASE_URL=postgresql://user:password@postgres_db:5432/yahoo_answers
-      - GEMINI_API_KEY={CLAVE_DE_API_DE_GEMINI_AQUI}
+      - GEMINI_API_KEY=AIzaSyCYzObA-SYdQchQysAZGB1trriSUziwV0I
       - DATASET_PATH=/app/Data/test.csv
     volumes:
       - ./Data:/app/Data
