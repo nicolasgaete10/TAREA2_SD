@@ -9,14 +9,9 @@ from collections import deque
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 app = Flask(__name__)
 
-# --- INICIO DE LA MODIFICACIÓN ---
 # Constante para el tamaño máximo del caché
 MAX_CACHE_SIZE = 6
-# Usamos una 'deque' para mantener un registro de las claves en orden de inserción.
-# Es más eficiente que una lista para añadir y quitar elementos de los extremos.
-# Poblaremos esta deque al iniciar si Redis ya tiene datos.
 CACHED_KEYS = deque(maxlen=MAX_CACHE_SIZE)
-# --- FIN DE LA MODIFICACIÓN ---
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis_cache:6379")
 SCORE_SERVICE_URL = os.environ.get("SCORE_SERVICE_URL", "http://score_service:5001/process")
@@ -42,6 +37,7 @@ def check_cache():
 
     data = request.json
     question = data.get('question')
+    correct_answer = data.get('correct_answer')  # ✅ NUEVO: recibir respuesta correcta
 
     if not question:
         return jsonify({"error": "La solicitud JSON debe incluir una 'pregunta'"}), 400
@@ -59,14 +55,21 @@ def check_cache():
         else:
             app.logger.info(f"Cache MISS para la pregunta: '{question[:50]}...'")
             
-            response = requests.post(SCORE_SERVICE_URL, json={'question': question}, timeout=30)
+            # ✅ CORREGIDO: Enviar también la respuesta correcta al Score Service
+            response = requests.post(
+                SCORE_SERVICE_URL, 
+                json={
+                    'question': question,
+                    'correct_answer': correct_answer  # ✅ NUEVO: enviar respuesta correcta
+                }, 
+                timeout=30
+            )
             response.raise_for_status()
             
             score_result = response.json()
             llm_answer = score_result.get('answer')
 
-
-#FIFO 
+            # FIFO 
             if llm_answer:
                 # --- LÓGICA DE CONTROL DE TAMAÑO ---
                 # Si el caché está lleno (según nuestro registro)
@@ -89,6 +92,28 @@ def check_cache():
         app.logger.error(f"Ocurrió un error inesperado: {e}")
         return jsonify({"error": "Error interno inesperado en el servidor de caché"}), 500
 
-# ... (el resto del archivo no cambia) ...
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Endpoint para verificar estado del servicio"""
+    try:
+        if cache:
+            cache.ping()
+            redis_status = "conectado"
+            cache_size = len(CACHED_KEYS)
+        else:
+            redis_status = "desconectado"
+            cache_size = 0
+            
+        return jsonify({
+            "status": "ok", 
+            "redis_status": redis_status,
+            "cache_size": cache_size,
+            "max_cache_size": MAX_CACHE_SIZE,
+            "policy": "FIFO"
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "redis_status": "error", "error": str(e)}), 500
+
 if __name__ == '__main__':
+    app.logger.info(f"Iniciando Cache Service con política FIFO (tamaño máximo: {MAX_CACHE_SIZE})")
     app.run(host='0.0.0.0', port=5000)

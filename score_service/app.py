@@ -1,278 +1,198 @@
 import os
-import psycopg2
-import time
-import redis
-import pandas as pd
-from psycopg2 import OperationalError
+import requests
 from flask import Flask, request, jsonify
 from google import genai
-from google.genai import types
 from rouge_score import rouge_scorer
 import logging
+import re
 
-# Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-DATASET_PATH = os.environ.get("DATASET_PATH", "/app/data/test.csv")
 
-dataset_df = None
-
-def initialize_database():
-    """
-    Se conecta a la base de datos con reintentos y asegura que la tabla exista.
-    """
-    db_url = os.environ.get("DATABASE_URL")
-    retries = 5
-    conn = None
-    while retries > 0:
-        try:
-            print("Intentando conectar a la base de datos...")
-            conn = psycopg2.connect(db_url)
-            print("Conexión a la base de datos exitosa.")
-            break
-        except OperationalError:
-            retries -= 1
-            print(f"La base de datos no está lista. Reintentando en 5 segundos... ({retries} intentos restantes)")
-            time.sleep(5)
-    
-    if retries == 0:
-        print("No se pudo conectar a la base de datos.")
-        return None
-
-    # Procede a crear la tabla si la conexión fue exitosa
-    try:
-        cur = conn.cursor()
-        create_script = """
-        CREATE TABLE IF NOT EXISTS qa_responses (
-            id SERIAL PRIMARY KEY,
-            question_text TEXT NOT NULL UNIQUE,
-            original_answer TEXT,
-            llm_answer TEXT,
-            quality_score FLOAT,
-            request_count INTEGER DEFAULT 1,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-        """
-        cur.execute(create_script)
-        conn.commit()
-        cur.close()
-        print("Tabla 'qa_responses' inicializada correctamente.")
-        return conn
-    except Exception as e:
-        print(f"Error creando tabla: {e}")
-        return None
-
-
+STORAGE_SERVICE_URL = os.environ.get("STORAGE_SERVICE_URL", "http://storage_service:5002/save")
 
 def get_gemini_client():
-    """Configura y retorna cliente Gemini con la nueva API"""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("GEMINI_API_KEY no configurada")
+        logger.error("GEMINI_API_KEY no configurada")
         return None
     
     try:
-        from google import genai
-        
         client = genai.Client(api_key=api_key)
         
         try:
-            # Probar diferentes modelos
             test_response = client.models.generate_content(
                 model="gemini-2.5-flash", 
                 contents="Hola, responde con 'OK' si funciono"
             )
-            print("Cliente Gemini configurado correctamente")
+            logger.info("Cliente Gemini configurado correctamente")
             return client
         except Exception as model_error:
-            print(f"Error con el modelo: {model_error}")
-            # Intentar con otro modelo
+            logger.error(f"Error con el modelo: {model_error}")
             try:
                 test_response = client.models.generate_content(
                     model="gemini-1.5-flash",
                     contents="Test"
                 )
-                print("Cliente Gemini configurado con gemini-1.5-flash")
+                logger.info("Cliente Gemini configurado con gemini-1.5-flash")
                 return client
             except Exception as e2:
-                print(f"Todos los modelos fallaron: {e2}")
+                logger.error(f"Todos los modelos fallaron: {e2}")
                 return None
                 
-    except ImportError:
-        print("Librería 'google-genai' no instalada")
-        return None
     except Exception as e:
-        print(f"Error configurando Gemini: {e}")
+        logger.error(f"Error configurando Gemini: {e}")
         return None
 
 class ScoreCalculator:
     def __init__(self):
         self.scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
     
+    def preprocess_text(self, text: str) -> str:
+        if not text:
+            return ""
+            
+        text = text.lower()
+        text = re.sub(r'[^\w\s\.\?\!]', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+    
     def calculate_score(self, generated_answer: str, reference_answer: str) -> float:
-        """
-        Calcula score de calidad usando ROUGE metrics
-        Retorna un valor entre 0 y 1
-        """
         try:
-            scores = self.scorer.score(reference_answer, generated_answer)
-            # Usamos el promedio de ROUGE-1 y ROUGE-L como score principal
+            gen_processed = self.preprocess_text(generated_answer)
+            ref_processed = self.preprocess_text(reference_answer)
+            
+            if not gen_processed or not ref_processed:
+                return 0.1
+                
+            error_phrases = ["no encontrada", "no disponible", "error buscando", "respuesta simulada"]
+            if any(phrase in gen_processed for phrase in error_phrases):
+                return 0.1
+            
+            scores = self.scorer.score(ref_processed, gen_processed)
+            
             rouge1 = scores['rouge1'].fmeasure
+            rouge2 = scores['rouge2'].fmeasure
             rougeL = scores['rougeL'].fmeasure
-            overall_score = (rouge1 + rougeL) / 2
+            
+            if len(gen_processed.split()) > 3 and len(ref_processed.split()) > 3:
+                overall_score = (rouge1 * 0.3 + rouge2 * 0.4 + rougeL * 0.3)
+            else:
+                overall_score = (rouge1 * 0.4 + rouge2 * 0.2 + rougeL * 0.4)
+            
+            gen_length = len(gen_processed.split())
+            ref_length = len(ref_processed.split())
+            
+            if ref_length > 0:
+                length_ratio = min(gen_length / ref_length, 2.0)
+                if length_ratio < 0.3 or length_ratio > 1.7:
+                    overall_score *= 0.8
+            
+            overall_score = max(0.0, min(1.0, overall_score))
+            
+            logger.info(f"ROUGE Scores - R1: {rouge1:.4f}, R2: {rouge2:.4f}, RL: {rougeL:.4f} -> Final: {overall_score:.4f}")
+            
             return round(overall_score, 4)
+            
         except Exception as e:
             logger.error(f"Error calculando score: {e}")
             return 0.0
-def load_dataset():
-    """Carga el dataset sin encabezados"""
-    global dataset_df
-    
-    try:
-        dataset_path = pd.read_csv(DATASET_PATH)
-        
-        # Leer dataset SIN header
-        dataset_df = pd.read_csv(dataset_path, header=None)
-        print(f"Dataset cargado: {len(dataset_df)} filas")
-        
-        # Asignar nombres directamente para 3 columnas
-        dataset_df.columns = ['class_label', 'question', 'best_answer']
-        print("Columnas asignadas: ['class_label', 'question', 'best_answer']")
-            
-        # Mostrar muestra
-        print("Muestra del dataset:")
-        for i in range(min(3, len(dataset_df))):
-            row = dataset_df.iloc[i]
-            print(f"  {i+1}. Clase: {row['class_label']} | Pregunta: {str(row['question'])[:50]}...")
-            
-        return True
-        
-    except Exception as e:
-        print(f"Error cargando dataset: {e}")
-        dataset_df = None
-        return False
 
-def get_reference_answer(question: str) -> str:
-    """
-    Busca la respuesta REAL en el dataset CSV de 3 columnas
-    """
-    if dataset_df is None:
-        return "Dataset no disponible"
-    
+def save_to_storage(question_text: str, original_answer: str, llm_answer: str, quality_score: float):
     try:
-        # Limpiar la pregunta para búsqueda
-        question_clean = question.strip()
+        data = {
+            "question_text": question_text,
+            "original_answer": original_answer,
+            "llm_answer": llm_answer,
+            "quality_score": quality_score
+        }
         
-        print(f"Buscando: '{question_clean}'")
-        
-        # ESTRATEGIA 1: Búsqueda exacta en la columna 'question'
-        if 'question' in dataset_df.columns:
-            exact_match = dataset_df[dataset_df['question'] == question_clean]
-            if not exact_match.empty:
-                best_answer = exact_match.iloc[0]['best_answer']
-                print("Encontrado (exacto)")
-                return best_answer if pd.notna(best_answer) else "Respuesta no disponible"
-        
-        # ESTRATEGIA 2: Búsqueda por similitud (case-insensitive)
-        question_lower = question_clean.lower()
-        
-        # Buscar en 'question' (case insensitive, parcial)
-        if 'question' in dataset_df.columns:
-            partial_matches = dataset_df[
-                dataset_df['question'].str.lower().str.contains(question_lower, na=False)
-            ]
-            if not partial_matches.empty:
-                best_answer = partial_matches.iloc[0]['best_answer']
-                print("Encontrado (parcial)")
-                return best_answer if pd.notna(best_answer) else "Respuesta no disponible"
-        
-        # ESTRATEGIA 3: Búsqueda por palabras clave
-        words = [word for word in question_lower.split() if len(word) > 3]
-        
-        if words and 'question' in dataset_df.columns:
-            for word in words[:2]:  # Solo primeras 2 palabras clave
-                keyword_matches = dataset_df[
-                    dataset_df['question'].str.lower().str.contains(word, na=False)
-                ]
-                if not keyword_matches.empty:
-                    best_answer = keyword_matches.iloc[0]['best_answer']
-                    print(f"Encontrado por palabra clave '{word}'")
-                    return best_answer if pd.notna(best_answer) else "Respuesta no disponible"
-        
-        print("Pregunta no encontrada en dataset")
-        return "Pregunta no encontrada en dataset"
-        
+        response = requests.post(STORAGE_SERVICE_URL, json=data, timeout=10)
+        if response.status_code == 200:
+            logger.info("Datos guardados exitosamente en storage service")
+        else:
+            logger.error(f"Error guardando en storage service: {response.status_code} - {response.text}")
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"No se pudo conectar al storage service: {e}")
     except Exception as e:
-        print(f"Error buscando en dataset: {e}")
-        return f"Error buscando respuesta: {str(e)}"
+        logger.error(f"Error inesperado al guardar en storage: {e}")
 
-# --- Inicialización de componentes ---
-db_connection = initialize_database()
+def generate_semantic_mock_response(question_text: str) -> str:
+    question_lower = question_text.lower()
+    
+    if 'distributed' in question_lower and 'system' in question_lower:
+        return "A distributed system consists of multiple components located on different networked computers that communicate and coordinate their actions."
+    elif 'cache' in question_lower:
+        return "Cache is a hardware or software component that stores data so that future requests for that data can be served faster."
+    elif 'database' in question_lower:
+        return "A database is an organized collection of structured information, or data, typically stored electronically in a computer system."
+    else:
+        return f"This question about '{question_text}' addresses important aspects that require comprehensive understanding of the underlying principles and practical applications in the field."
+
 gemini_client = get_gemini_client()
 score_calculator = ScoreCalculator()
 
-# Carga el dataset al iniciar
-load_dataset()
-
-# --- Crea la aplicación Flask ---
 app = Flask(__name__)
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Endpoint para verificar estado del servicio"""
     components = {
-        "database": db_connection is not None,
         "gemini": gemini_client is not None
     }
     return jsonify({"status": "healthy", "components": components})
 
 @app.route('/process', methods=['POST'])
 def process_question():
-    # Verificar JSON
     data = request.get_json()
     if not data or 'question' not in data:
         return jsonify({"error": "No se proporcionó una pregunta"}), 400
 
     question_text = data['question'].strip()
+    correct_answer = data.get('correct_answer', '').strip()  # RECIBIR respuesta correcta
+    
     if not question_text:
         return jsonify({"error": "Pregunta vacía"}), 400
 
     logger.info(f"Pregunta recibida: '{question_text[:60]}...'")
 
-    
     try:
-        # Obtener respuesta de referencia
-        reference_answer = get_reference_answer(question_text)
+        # USAR LA RESPUESTA CORRECTA QUE YA RECIBIMOS
+        reference_answer = correct_answer if correct_answer else "No se proporcionó respuesta de referencia"
+        logger.info(f"Respuesta de referencia recibida: '{reference_answer[:60]}...'")
         
-        # Generar respuesta con Gemini
         if gemini_client:
             try:
-        
+                prompt = f"""
+                Please provide a clear and concise answer to the following question in English.
+                Focus on the key information and keep the response direct and factual.
+                
+                Question: {question_text}
+                
+                Answer:
+                """
+                
                 response = gemini_client.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=f"Responde de manera concisa y directa en ingles: {question_text}"
+                    contents=prompt
                 )
                 llm_answer = response.text.strip()
                 source = "gemini"
-                logger.info(f"Respuesta generada con Gemini: {llm_answer[:150]}...")
+                logger.info(f"Respuesta generada con Gemini: {llm_answer[:100]}...")
+                
             except Exception as e:
                 logger.error(f"Error con Gemini API: {e}")
-            # Fallback a mock
-                llm_answer = generate_mock_response(question_text)
+                llm_answer = generate_semantic_mock_response(question_text)
                 source = "mock_fallback"
         else:
-            # Fallback mock
-            llm_answer = generate_mock_response(question_text)
+            llm_answer = generate_semantic_mock_response(question_text)
             source = "mock"
                 
-        # 3. CALCULAR SCORE DE CALIDAD
         quality_score = score_calculator.calculate_score(llm_answer, reference_answer)
         logger.info(f"Score de calidad calculado: {quality_score}")
         
-        save_to_database(question_text, reference_answer, llm_answer, quality_score)
+        save_to_storage(question_text, reference_answer, llm_answer, quality_score)
         
-        # 5. RETORNAR RESPUESTA
         return jsonify({
             "status": "success",
             "source": source,
@@ -285,37 +205,6 @@ def process_question():
         logger.error(f"Error procesando pregunta: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
-def generate_mock_response(question_text: str) -> str:
-    return f"Respuesta simulada para: {question_text}"
-
-
-
-def save_to_database(question_text: str, original_answer: str, llm_answer: str, quality_score: float):
-    """Guarda la pregunta y respuestas en la base de datos"""
-    if not db_connection:
-        logger.warning(" No hay conexión a la base de datos")
-        return
-    
-    try:
-        cur = db_connection.cursor()
-        cur.execute("""
-            INSERT INTO qa_responses 
-            (question_text, original_answer, llm_answer, quality_score) 
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (question_text) 
-            DO UPDATE SET 
-                llm_answer = EXCLUDED.llm_answer,
-                quality_score = EXCLUDED.quality_score,
-                request_count = qa_responses.request_count + 1,
-                updated_at = NOW()
-        """, (question_text, original_answer, llm_answer, quality_score))
-        db_connection.commit()
-        cur.close()
-        logger.info("Datos guardados en base de datos")
-    except Exception as e:
-        logger.error(f"Error guardando en base de datos: {e}")
-
-# --- Mantiene el servidor corriendo ---
 if __name__ == '__main__':
-    print("Iniciando Score Service...")
-    app.run(host='0.0.0.0', port=5001, debug=False)  # debug=False para producción
+    logger.info("Iniciando Score Service (sin dataset local)...")
+    app.run(host='0.0.0.0', port=5001, debug=False)

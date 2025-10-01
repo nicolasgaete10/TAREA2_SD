@@ -5,35 +5,31 @@ import logging
 from psycopg2 import OperationalError
 from flask import Flask, request, jsonify
 
-# Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
 def initialize_database():
-    """
-    Se conecta a la base de datos con reintentos y asegura que la tabla exista.
-    """
     db_url = os.environ.get("DATABASE_URL")
     retries = 5
     conn = None
+    
     while retries > 0:
         try:
             logger.info("Intentando conectar a la base de datos...")
             conn = psycopg2.connect(db_url)
-            logger.info("Conexión a la base de datos exitosa.")
+            logger.info("Conexion a la base de datos exitosa.")
             break
         except OperationalError:
             retries -= 1
-            logger.warning(f"La base de datos no está lista. Reintentando en 5 segundos... ({retries} intentos restantes)")
+            logger.warning(f"Base de datos no lista. Reintentando en 5 segundos... ({retries} intentos restantes)")
             time.sleep(5)
     
     if retries == 0:
         logger.error("No se pudo conectar a la base de datos.")
         return None
 
-    # Procede a crear la tabla si la conexión fue exitosa
     try:
         cur = conn.cursor()
         create_script = """
@@ -57,12 +53,10 @@ def initialize_database():
         logger.error(f"Error creando tabla: {e}")
         return None
 
-# Inicializar conexión a la base de datos
 db_connection = initialize_database()
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Endpoint para verificar estado del servicio"""
     status = "healthy" if db_connection else "unhealthy"
     return jsonify({
         "status": status,
@@ -72,7 +66,6 @@ def health_check():
 
 @app.route('/save', methods=['POST'])
 def save_data():
-    """Guarda o actualiza datos en la base de datos"""
     if not db_connection:
         return jsonify({"error": "Base de datos no disponible"}), 503
 
@@ -106,7 +99,7 @@ def save_data():
         db_connection.commit()
         cur.close()
         
-        logger.info(f"Datos guardados en base de datos para pregunta: '{question_text[:50]}...'")
+        logger.info(f"Datos guardados para pregunta: '{question_text[:50]}...'")
         return jsonify({"status": "success", "message": "Datos guardados correctamente"})
         
     except Exception as e:
@@ -115,32 +108,22 @@ def save_data():
 
 @app.route('/stats', methods=['GET'])
 def get_stats():
-    """Obtiene estadísticas de la base de datos"""
     if not db_connection:
         return jsonify({"error": "Base de datos no disponible"}), 503
 
     try:
         cur = db_connection.cursor()
         
-        # Total de registros
         cur.execute("SELECT COUNT(*) FROM qa_responses")
         total_records = cur.fetchone()[0]
         
-        # Preguntas únicas
         cur.execute("SELECT COUNT(DISTINCT question_text) FROM qa_responses")
         unique_questions = cur.fetchone()[0]
         
-        # Score promedio
         cur.execute("SELECT AVG(quality_score) FROM qa_responses WHERE quality_score IS NOT NULL")
         avg_score = cur.fetchone()[0]
         
-        # Pregunta más popular
-        cur.execute("""
-            SELECT question_text, request_count 
-            FROM qa_responses 
-            ORDER BY request_count DESC 
-            LIMIT 1
-        """)
+        cur.execute("SELECT question_text, request_count FROM qa_responses ORDER BY request_count DESC LIMIT 1")
         popular_result = cur.fetchone()
         most_popular = popular_result[0] if popular_result else "N/A"
         max_requests = popular_result[1] if popular_result else 0
@@ -156,8 +139,8 @@ def get_stats():
         })
         
     except Exception as e:
-        logger.error(f"Error obteniendo estadísticas: {e}")
-        return jsonify({"error": f"Error interno al obtener estadísticas: {str(e)}"}), 500
+        logger.error(f"Error obteniendo estadisticas: {e}")
+        return jsonify({"error": f"Error interno al obtener estadisticas: {str(e)}"}), 500
 
 if __name__ == '__main__':
     logger.info("Iniciando Storage Service...")

@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: yahoo_answers
+      POSTGRES_DB: yahoo_respuestas
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -20,51 +20,60 @@ services:
     container_name: redis_cache
     ports:
       - "6379:6379"
-    command:
-      - redis-server
-      - --maxmemory 1mb # <-- AUMENTA EL LÍMITE AQUÍ
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
 
-  # Servicio que se conecta al LLM y la BD
+  # Servicio de almacenamiento 
+  almacenamiento:
+    build: ./almacenamiento
+    container_name: almacenamiento
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres_db:5432/yahoo_respuestas
+    ports:
+      - "5002:5002"
+    depends_on:
+      - postgres
+
+  # Servicio de cálculo de score y LLM 
   score_service:
     build: ./score_service
     container_name: score_service
     environment:
-      - DATABASE_URL=postgresql://user:password@postgres_db:5432/yahoo_answers
-      - GEMINI_API_KEY=AIzaSyCTZMbxDFUKbn867zdncX5OGsbpzslxn_0
+      - GEMINI_API_KEY=${Clave_GEMINI_API_KEY}
       - DATASET_PATH=/app/Data/test.csv
+      - STORAGE_SERVICE_URL=http://almacenamiento:5002/save
     volumes:
       - ./Data:/app/Data
-    depends_on:
-      - postgres
     ports:
       - "5001:5001"
+    depends_on:
+      - almacenamiento
 
-  # Servicio de caché que actúa como intermediario
+  # Servicio de caché 
   cache_service:
     build: ./cache_service
     container_name: cache_service
     environment:
-      # El caché necesita saber dónde están Redis y el servicio de score
       - REDIS_URL=redis://redis_cache:6379
       - SCORE_SERVICE_URL=http://score_service:5001/process
+      - MAX_CACHE_SIZE=6
     ports:
       - "5000:5000"
     depends_on:
       - redis
       - score_service
 
-  # Servicio que simula el tráfico de usuarios
+  # Generador de tráfico
   traffic_generator:
     build: ./traffic_generator
     container_name: traffic_generator
     environment:
-      # ¡IMPORTANTE! Ahora el generador de tráfico apunta al servicio de caché
       - CACHE_SERVICE_URL=http://cache_service:5000/check
       - DATASET_PATH=/app/Data/test.csv
     volumes:
       - ./Data:/app/Data
     depends_on:
       - cache_service
+    restart: on-failure
 
 volumes:
   postgres_data:
