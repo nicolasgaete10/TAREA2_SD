@@ -29,7 +29,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@postgres_db:5432/yahoo_respuestas
     ports:
-      - "5002:5002"
+      - "5005:5005"
     depends_on:
       - postgres
 
@@ -40,7 +40,7 @@ services:
     environment:
       - GEMINI_API_KEY=${Clave_GEMINI_API_KEY}
       - DATASET_PATH=/app/Data/test.csv
-      - STORAGE_SERVICE_URL=http://almacenamiento:5002/save
+      - STORAGE_SERVICE_URL=http://almacenamiento:5005/save
     volumes:
       - ./Data:/app/Data
     ports:
@@ -48,31 +48,41 @@ services:
     depends_on:
       - almacenamiento
 
-  # Servicio de caché 
-  cache_service:
+  cache_fifo:
     build: ./cache_service
-    container_name: cache_service
+    container_name: cache_fifo
+    command: ["python", "cache_FIFO.py"]
     environment:
       - REDIS_URL=redis://redis_cache:6379
       - SCORE_SERVICE_URL=http://score_service:5001/process
-      - MAX_CACHE_SIZE=6
     ports:
       - "5000:5000"
     depends_on:
       - redis
-      - score_service
+
+  cache_lru:
+    build: ./cache_service
+    container_name: cache_lru
+    command: ["python", "cache_lru.py"]
+    environment:
+      - REDIS_URL=redis://redis_cache:6379
+      - SCORE_SERVICE_URL=http://score_service:5001/process
+    ports:
+      - "5002:5002"
+    depends_on:
+      - redis
 
   # Generador de tráfico
   traffic_generator:
     build: ./traffic_generator
     container_name: traffic_generator
     environment:
-      - CACHE_SERVICE_URL=http://cache_service:5000/check
+      - CACHE_SERVICE_URL=${CACHE_SERVICE_URL:-http://cache_fifo:5000/check}
       - DATASET_PATH=/app/Data/test.csv
     volumes:
       - ./Data:/app/Data
     depends_on:
-      - cache_service
+      - cache_fifo
     restart: on-failure
 
 volumes:

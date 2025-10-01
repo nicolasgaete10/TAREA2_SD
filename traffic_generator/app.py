@@ -21,7 +21,6 @@ DATASET_PATH = os.environ.get("DATASET_PATH", "/app/Data/test.csv")
 class TrafficDistribution(Enum):
     UNIFORM = "uniform"
     EXPONENTIAL = "exponential"
-    BURST = "burst"
 
 class TrafficGenerator:
     def __init__(self):
@@ -35,10 +34,10 @@ class TrafficGenerator:
             df = pd.read_csv(DATASET_PATH, header=None)
             logger.info(f"Dataset cargado: {len(df)} filas, {len(df.columns)} columnas")
             
-            # CORREGIDO: Usar columna 1 para pregunta y columna 3 para respuesta real
+            
             if len(df.columns) == 4:
-                questions = df.iloc[:, 1].dropna().tolist()  # Columna 1: pregunta principal
-                answers = df.iloc[:, 3].dropna().tolist()    # Columna 3: respuesta real 
+                questions = df.iloc[:, 1].dropna().tolist()  
+                answers = df.iloc[:, 3].dropna().tolist()    
                 logger.info("Usando columnas 1 (pregunta) y 3 (respuesta)")
             elif len(df.columns) >= 3:
                 questions = df.iloc[:, 1].dropna().tolist()
@@ -51,7 +50,7 @@ class TrafficGenerator:
             # Crear lista de tuplas (pregunta, respuesta)
             qa_pairs = list(zip(questions, answers))
             logger.info(f"Se cargaron {len(qa_pairs)} pares pregunta-respuesta")
-            return qa_pairs[:100]
+            return qa_pairs[:500]
                 
         except Exception as e:
             logger.error(f"Error cargando dataset: {e}")
@@ -100,11 +99,6 @@ class TrafficGenerator:
                 return np.random.exponential(scale=1.5)
             else:
                 return np.random.exponential(scale=3.0)
-        elif distribution == TrafficDistribution.BURST:
-            if phase == "burst":
-                return random.uniform(0.1, 0.5)
-            else:
-                return random.uniform(8.0, 15.0)
 
 def simulate_uniform_distribution(generator: TrafficGenerator, duration_minutes: int = 3):
     logger.info("INICIANDO DISTRIBUCION UNIFORME - Trafico constante")
@@ -151,38 +145,6 @@ def simulate_exponential_distribution(generator: TrafficGenerator, duration_minu
     
     logger.info(f"Distribucion Exponencial completada: {request_count} solicitudes en {duration_minutes} minutos")
 
-def simulate_burst_distribution(generator: TrafficGenerator, duration_minutes: int = 3):
-    logger.info("INICIANDO DISTRIBUCION BURST - Trafico en rafagas")
-    logger.info("Justificacion: Simula eventos especiales, horarios pico, o anuncios virales")
-    
-    end_time = time.time() + (duration_minutes * 60)
-    request_count = 0
-    burst_active = False
-    burst_start_time = 0
-    burst_duration = 30  # 30 segundos de ráfaga
-    
-    while time.time() < end_time:
-        # Decidir si iniciar/terminar ráfaga
-        if not burst_active and random.random() < 0.2:  # 20% de chance de iniciar ráfaga
-            burst_active = True
-            burst_start_time = time.time()
-            logger.info(f"INICIANDO RAFAGA - Duracion: {burst_duration:.1f}s")
-        
-        elif burst_active and (time.time() - burst_start_time > burst_duration):
-            burst_active = False
-            logger.info("FINALIZANDO RAFAGA - Periodo de silencio")
-        
-        question, correct_answer = random.choice(generator.qa_pairs)
-        generator.send_question(question, correct_answer)
-        request_count += 1
-        
-        phase = "burst" if burst_active else "silent"
-        sleep_time = generator.get_interarrival_time(TrafficDistribution.BURST, phase)
-        logger.info(f"Proxima solicitud en {sleep_time:.2f}s (Burst - {phase})")
-        time.sleep(sleep_time)
-    
-    logger.info(f"Distribucion Burst completada: {request_count} solicitudes en {duration_minutes} minutos")
-
 def main():
     logger.info("Iniciando Generador de Trafico con Multiples Distribuciones")
     logger.info("Esperando 20 segundos para que todos los servicios se inicien...")
@@ -201,10 +163,6 @@ def main():
         logger.info("\n" + "="*60)
         time.sleep(5)
         simulate_exponential_distribution(generator, duration_minutes=2)
-        
-        logger.info("\n" + "="*60)
-        time.sleep(5)
-        simulate_burst_distribution(generator, duration_minutes=2)
         
         logger.info("\nTodas las distribuciones completadas exitosamente!")
         
