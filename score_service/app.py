@@ -166,7 +166,6 @@ def process_question():
                 prompt = f"""
                 Please provide a clear and concise answer to the following question in English.
                 Focus on the key information and keep the response direct and factual.
-                
                 Question: {question_text}
                 
                 Answer:

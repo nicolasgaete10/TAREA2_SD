@@ -50,7 +50,7 @@ class TrafficGenerator:
             # Crear lista de tuplas (pregunta, respuesta)
             qa_pairs = list(zip(questions, answers))
             logger.info(f"Se cargaron {len(qa_pairs)} pares pregunta-respuesta")
-            return qa_pairs[:500]
+            return qa_pairs[:20000]
                 
         except Exception as e:
             logger.error(f"Error cargando dataset: {e}")
