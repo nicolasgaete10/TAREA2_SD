@@ -108,7 +108,7 @@ def simulate_uniform_distribution(generator: TrafficGenerator, duration_minutes:
     
     while time.time() < end_time:
         question, correct_answer = random.choice(generator.qa_pairs)
-        generator.send_question(question, correct_answer, "UNIFORM")  # Añadir distribución
+        generator.send_question(question, correct_answer, "UNIFORM")  
         request_count += 1
         
         sleep_time = generator.get_interarrival_time(TrafficDistribution.UNIFORM)
@@ -127,14 +127,13 @@ def simulate_exponential_distribution(generator: TrafficGenerator, duration_minu
     current_phase = "normal"
     
     while time.time() < end_time:
-        # Verificar cambio de fase cada minuto
         if time.time() - last_phase_change > phase_duration:
             current_phase = "high" if current_phase == "normal" else "normal"
             last_phase_change = time.time()
             logger.info(f"Cambiando a fase: {current_phase.upper()}")
         
         question, correct_answer = random.choice(generator.qa_pairs)
-        generator.send_question(question, correct_answer, "EXPONENTIAL")  # Añadir distribución
+        generator.send_question(question, correct_answer, "EXPONENTIAL")  
         request_count += 1
         
         sleep_time = generator.get_interarrival_time(TrafficDistribution.EXPONENTIAL, current_phase)

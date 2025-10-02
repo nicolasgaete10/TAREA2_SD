@@ -8,7 +8,7 @@ from collections import deque
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 app = Flask(__name__)
 
-MAX_CACHE_SIZE = 100
+MAX_CACHE_SIZE = 6
 CACHED_KEYS = deque(maxlen=MAX_CACHE_SIZE)
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis_cache:6379")

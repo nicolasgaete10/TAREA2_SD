@@ -8,7 +8,7 @@ import time
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 app = Flask(__name__)
 
-MAX_CACHE_SIZE = 100
+MAX_CACHE_SIZE = 6
 LRU_SET_KEY = "cache_keys_lru_zset" 
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis_cache:6379")
