@@ -17,7 +17,6 @@ logger = logging.getLogger("TrafficGenerator")
 
 CACHE_SERVICE_URL = os.environ.get("CACHE_SERVICE_URL", "http://cache_service:5000/check")
 DATASET_PATH = os.environ.get("DATASET_PATH", "/app/Data/test.csv")
-# NUEVO: Leer la distribución seleccionada desde el script de inicio
 TRAFFIC_DISTRIBUTION_CHOICE = os.environ.get("TRAFFIC_DISTRIBUTION", "uniform").lower() 
 
 class TrafficDistribution(Enum):
@@ -97,7 +96,7 @@ class TrafficGenerator:
                 return np.random.exponential(scale=1.5)
             else:
                 return np.random.exponential(scale=3.0)
-        return 0  # Fallback
+        return 0 
 
 def simulate_uniform_distribution(generator: TrafficGenerator, duration_minutes: int = 10):
     logger.info("INICIANDO DISTRIBUCION UNIFORME - Trafico constante")
@@ -154,12 +153,11 @@ def main():
 
     try:
         logger.info("\n" + "="*60)
-        
-        # LÓGICA DE SELECCIÓN DE DISTRIBUCIÓN
+       
         if TRAFFIC_DISTRIBUTION_CHOICE == TrafficDistribution.UNIFORM.value:
-            simulate_uniform_distribution(generator, duration_minutes=10)  # Añadir parámetro
+            simulate_uniform_distribution(generator, duration_minutes=10)  
         elif TRAFFIC_DISTRIBUTION_CHOICE == TrafficDistribution.EXPONENTIAL.value:
-            simulate_exponential_distribution(generator, duration_minutes=10)  # Añadir parámetro
+            simulate_exponential_distribution(generator, duration_minutes=10)  
         else:
             logger.error(f"Distribución '{TRAFFIC_DISTRIBUTION_CHOICE}' no reconocida. Ejecutando Uniforme por defecto.")
             simulate_uniform_distribution(generator, duration_minutes=10)
