@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 def initialize_database():
     db_url = os.environ.get("DATABASE_URL")
-    retries = 5
+    retries = 10  # 🔼 AUMENTAR de 5 a 10
     conn = None
     
     while retries > 0:
@@ -21,13 +21,13 @@ def initialize_database():
             conn = psycopg2.connect(db_url)
             logger.info("Conexion a la base de datos exitosa.")
             break
-        except OperationalError:
+        except OperationalError as e:  # 🔼 Capturar la excepción para más detalles
             retries -= 1
-            logger.warning(f"Base de datos no lista. Reintentando en 5 segundos... ({retries} intentos restantes)")
-            time.sleep(5)
+            logger.warning(f"Base de datos no lista. Reintentando en 10 segundos... ({retries} intentos restantes). Error: {e}")
+            time.sleep(10)  # 🔼 AUMENTAR de 5 a 10 segundos
     
     if retries == 0:
-        logger.error("No se pudo conectar a la base de datos.")
+        logger.error("No se pudo conectar a la base de datos después de todos los reintentos.")
         return None
 
     try:
@@ -53,6 +53,14 @@ def initialize_database():
         logger.error(f"Error creando tabla: {e}")
         return None
 
+# 🔼 AGREGAR ESTA FUNCIÓN PARA REINTENTAR CONEXIÓN
+def get_db_connection():
+    global db_connection
+    if db_connection is None or db_connection.closed:
+        logger.info("Reconectando a la base de datos...")
+        db_connection = initialize_database()
+    return db_connection
+
 db_connection = initialize_database()
 
 @app.route('/health', methods=['GET'])
@@ -66,7 +74,8 @@ def health_check():
 
 @app.route('/save', methods=['POST'])
 def save_data():
-    if not db_connection:
+    conn = get_db_connection()  # 🔼 Usar la función con reconexión
+    if not conn:
         return jsonify({"error": "Base de datos no disponible"}), 503
 
     data = request.get_json()
@@ -84,7 +93,7 @@ def save_data():
     quality_score = data['quality_score']
 
     try:
-        cur = db_connection.cursor()
+        cur = conn.cursor()
         cur.execute("""
             INSERT INTO qa_responses 
             (question_text, original_answer, llm_answer, quality_score) 
@@ -96,7 +105,7 @@ def save_data():
                 request_count = qa_responses.request_count + 1,
                 updated_at = NOW()
         """, (question_text, original_answer, llm_answer, quality_score))
-        db_connection.commit()
+        conn.commit()
         cur.close()
         
         logger.info(f"Datos guardados para pregunta: '{question_text[:50]}...'")
@@ -104,15 +113,33 @@ def save_data():
         
     except Exception as e:
         logger.error(f"Error guardando en base de datos: {e}")
+        # 🔼 Intentar reconectar si hay error
+        global db_connection
+        db_connection = None
         return jsonify({"error": f"Error interno al guardar datos: {str(e)}"}), 500
+
+# 🔼 AGREGAR ENDPOINTS PARA LOGS DE CACHE (aunque no los guardes)
+@app.route('/log_cache_access', methods=['POST'])
+def log_cache_access():
+    """Endpoint simple para logs de cache - solo para evitar errores 404"""
+    data = request.get_json()
+    if data:
+        logger.info(f"Log cache recibido: {data.get('cache_policy')} - {data.get('traffic_distribution')} - {'HIT' if data.get('cache_hit') else 'MISS'}")
+    return jsonify({"status": "success", "message": "Log recibido"})
+
+@app.route('/cache_stats', methods=['GET'])
+def get_cache_stats():
+    """Endpoint simple para estadísticas de cache"""
+    return jsonify({"message": "Estadísticas de cache no implementadas"})
 
 @app.route('/stats', methods=['GET'])
 def get_stats():
-    if not db_connection:
+    conn = get_db_connection()  # 🔼 Usar la función con reconexión
+    if not conn:
         return jsonify({"error": "Base de datos no disponible"}), 503
 
     try:
-        cur = db_connection.cursor()
+        cur = conn.cursor()
         
         cur.execute("SELECT COUNT(*) FROM qa_responses")
         total_records = cur.fetchone()[0]

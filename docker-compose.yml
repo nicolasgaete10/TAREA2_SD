@@ -32,6 +32,7 @@ services:
       - "5005:5005"
     depends_on:
       - postgres
+    restart: on-failure
 
   # Servicio de cálculo de score y LLM 
   score_service:

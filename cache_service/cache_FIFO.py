@@ -5,22 +5,20 @@ import os
 import logging
 from collections import deque
 
-# Configurar un logging más claro
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 app = Flask(__name__)
 
-# Constante para el tamaño máximo del caché
-MAX_CACHE_SIZE = 6
+MAX_CACHE_SIZE = 100
 CACHED_KEYS = deque(maxlen=MAX_CACHE_SIZE)
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis_cache:6379")
 SCORE_SERVICE_URL = os.environ.get("SCORE_SERVICE_URL", "http://score_service:5001/process")
+STORAGE_SERVICE_URL = os.environ.get("STORAGE_SERVICE_URL", "http://almacenamiento:5005")
 
 try:
     cache = redis.from_url(REDIS_URL, decode_responses=True)
     cache.ping()
     app.logger.info("Conexión a Redis exitosa.")
-    # Al iniciar, llenamos nuestro registro con las claves que ya existen en Redis
     existing_keys = cache.keys('*')
     for key in existing_keys:
         if len(CACHED_KEYS) < MAX_CACHE_SIZE:
@@ -30,6 +28,25 @@ except redis.exceptions.ConnectionError as e:
     app.logger.error(f"FATAL: No se pudo conectar a Redis en {REDIS_URL}. Error: {e}")
     cache = None
 
+def log_cache_access(question: str, cache_hit: bool, distribution: str):
+    """Registra el acceso al cache en PostgreSQL"""
+    try:
+        data = {
+            "question_text": question,
+            "cache_hit": cache_hit,
+            "cache_policy": "FIFO",
+            "traffic_distribution": distribution
+        }
+        
+        requests.post(
+            f"{STORAGE_SERVICE_URL}/log_cache_access",
+            json=data,
+            timeout=5
+        )
+        app.logger.info(f"Log registrado: {distribution} - {'HIT' if cache_hit else 'MISS'}")
+    except Exception as e:
+        app.logger.error(f"Error registrando acceso cache: {e}")
+
 @app.route('/check', methods=['POST'])
 def check_cache():
     if not cache:
@@ -37,7 +54,8 @@ def check_cache():
 
     data = request.json
     question = data.get('question')
-    correct_answer = data.get('correct_answer')  # ✅ NUEVO: recibir respuesta correcta
+    correct_answer = data.get('correct_answer')
+    distribution = data.get('distribution', 'UNKNOWN')  # NUEVO: recibir distribución
 
     if not question:
         return jsonify({"error": "La solicitud JSON debe incluir una 'pregunta'"}), 400
@@ -47,6 +65,8 @@ def check_cache():
 
         if cached_response:
             app.logger.info(f"Cache HIT para la pregunta: '{question[:50]}...'")
+            # REGISTRAR HIT
+            log_cache_access(question, True, distribution)
             return jsonify({
                 "source": "cache",
                 "question": question,
@@ -54,13 +74,14 @@ def check_cache():
             })
         else:
             app.logger.info(f"Cache MISS para la pregunta: '{question[:50]}...'")
+            # REGISTRAR MISS
+            log_cache_access(question, False, distribution)
             
-            # ✅ CORREGIDO: Enviar también la respuesta correcta al Score Service
             response = requests.post(
                 SCORE_SERVICE_URL, 
                 json={
                     'question': question,
-                    'correct_answer': correct_answer  # ✅ NUEVO: enviar respuesta correcta
+                    'correct_answer': correct_answer  
                 }, 
                 timeout=30
             )
@@ -69,20 +90,13 @@ def check_cache():
             score_result = response.json()
             llm_answer = score_result.get('answer')
 
-            # FIFO 
             if llm_answer:
-                # --- LÓGICA DE CONTROL DE TAMAÑO ---
-                # Si el caché está lleno (según nuestro registro)
                 if len(CACHED_KEYS) >= MAX_CACHE_SIZE:
-                    # Sacamos la clave más antigua de nuestro registro
                     oldest_key = CACHED_KEYS.popleft()
-                    # La eliminamos de Redis para hacer espacio
                     cache.delete(oldest_key)
                     app.logger.info(f"Caché lleno. Eliminando la clave más antigua: '{oldest_key[:50]}...'")
 
-                # Ahora guardamos la nueva respuesta
                 cache.set(question, llm_answer)
-                # Y añadimos la nueva clave a nuestro registro
                 CACHED_KEYS.append(question)
                 app.logger.info(f"Respuesta para '{question[:50]}...' guardada en caché. Tamaño actual: {len(CACHED_KEYS)}.")
                 
