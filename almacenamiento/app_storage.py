@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 def initialize_database():
     db_url = os.environ.get("DATABASE_URL")
-    retries = 10  # 🔼 AUMENTAR de 5 a 10
+    retries = 10
     conn = None
     
     while retries > 0:
@@ -21,10 +21,10 @@ def initialize_database():
             conn = psycopg2.connect(db_url)
             logger.info("Conexion a la base de datos exitosa.")
             break
-        except OperationalError as e:  # 🔼 Capturar la excepción para más detalles
+        except OperationalError as e:  
             retries -= 1
             logger.warning(f"Base de datos no lista. Reintentando en 10 segundos... ({retries} intentos restantes). Error: {e}")
-            time.sleep(10)  # 🔼 AUMENTAR de 5 a 10 segundos
+            time.sleep(10)  
     
     if retries == 0:
         logger.error("No se pudo conectar a la base de datos después de todos los reintentos.")
@@ -53,7 +53,6 @@ def initialize_database():
         logger.error(f"Error creando tabla: {e}")
         return None
 
-# 🔼 AGREGAR ESTA FUNCIÓN PARA REINTENTAR CONEXIÓN
 def get_db_connection():
     global db_connection
     if db_connection is None or db_connection.closed:
@@ -74,7 +73,7 @@ def health_check():
 
 @app.route('/save', methods=['POST'])
 def save_data():
-    conn = get_db_connection()  # 🔼 Usar la función con reconexión
+    conn = get_db_connection() 
     if not conn:
         return jsonify({"error": "Base de datos no disponible"}), 503
 
@@ -113,12 +112,10 @@ def save_data():
         
     except Exception as e:
         logger.error(f"Error guardando en base de datos: {e}")
-        # 🔼 Intentar reconectar si hay error
         global db_connection
         db_connection = None
         return jsonify({"error": f"Error interno al guardar datos: {str(e)}"}), 500
 
-# 🔼 AGREGAR ENDPOINTS PARA LOGS DE CACHE (aunque no los guardes)
 @app.route('/log_cache_access', methods=['POST'])
 def log_cache_access():
     """Endpoint simple para logs de cache - solo para evitar errores 404"""
@@ -134,7 +131,7 @@ def get_cache_stats():
 
 @app.route('/stats', methods=['GET'])
 def get_stats():
-    conn = get_db_connection()  # 🔼 Usar la función con reconexión
+    conn = get_db_connection()  
     if not conn:
         return jsonify({"error": "Base de datos no disponible"}), 503
 
