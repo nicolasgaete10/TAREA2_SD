@@ -35,7 +35,7 @@ services:
     build: ./score_service
     container_name: score_service
     environment:
-      - GEMINI_API_KEY=${Clave_GEMINI_API_KEY}
+      - GEMINI_API_KEY=AIzaSyD4vwtIrjhCAh3sry44QfAwpbqyBxdY6Og
       - DATASET_PATH=/app/Data/test.csv
       - STORAGE_SERVICE_URL=http://almacenamiento:5005/save
     volumes:
