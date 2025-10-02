@@ -149,7 +149,7 @@ def process_question():
         return jsonify({"error": "No se proporcionó una pregunta"}), 400
 
     question_text = data['question'].strip()
-    correct_answer = data.get('correct_answer', '').strip()  # RECIBIR respuesta correcta
+    correct_answer = data.get('correct_answer', '').strip()  
     
     if not question_text:
         return jsonify({"error": "Pregunta vacía"}), 400
@@ -157,7 +157,6 @@ def process_question():
     logger.info(f"Pregunta recibida: '{question_text[:60]}...'")
 
     try:
-        # USAR LA RESPUESTA CORRECTA QUE YA RECIBIMOS
         reference_answer = correct_answer if correct_answer else "No se proporcionó respuesta de referencia"
         logger.info(f"Respuesta de referencia recibida: '{reference_answer[:60]}...'")
         
