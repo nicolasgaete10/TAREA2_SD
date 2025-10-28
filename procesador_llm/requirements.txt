@@ -1,0 +1,11 @@
+# Cliente de Python para Kafka
+kafka-python==2.0.2
+
+# Cliente de Python para Redis
+redis==4.3.4
+
+# Cliente de Google Gemini API
+google-generativeai==0.7.1
+
+# Librería para calcular el score ROUGE
+rouge-score==0.1.2

@@ -1,173 +1,152 @@
-import requests
+import os
 import time
 import pandas as pd
-import random
-import os
-import logging
-import sys
 import numpy as np
-from enum import Enum
+import random
+import logging
+import json
+from kafka import KafkaProducer
+from kafka.errors import NoBrokersAvailable
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger("TrafficGenerator")
+# --- Configuración de Logging ---
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S')
+log = logging.getLogger("TrafficGeneratorKafka")
 
-CACHE_SERVICE_URL = os.environ.get("CACHE_SERVICE_URL", "http://cache_service:5000/check")
-DATASET_PATH = os.environ.get("DATASET_PATH", "/app/Data/test.csv")
-TRAFFIC_DISTRIBUTION_CHOICE = os.environ.get("TRAFFIC_DISTRIBUTION", "uniform").lower() 
+# --- Variables de Entorno ---
+KAFKA_BROKER = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'kafka:29092')
+KAFKA_TOPIC = os.environ.get('KAFKA_TOPIC', 'preguntas_pendientes')
+DATASET_PATH = os.environ.get('DATASET_PATH', '/app/Data/test.csv')
+TRAFFIC_DISTRIBUTION = os.environ.get('TRAFFIC_DISTRIBUTION', 'uniform')
+SIMULATION_TIME_MIN = int(os.environ.get('SIMULATION_TIME_MIN', 10))
 
-class TrafficDistribution(Enum):
-    UNIFORM = "uniform"
-    EXPONENTIAL = "exponential"
+# --- Almacén de datos (simple) ---
+dataset = []
 
-class TrafficGenerator:
-    def __init__(self):
-        self.qa_pairs = self.load_qa_pairs()
-        if self.qa_pairs:
-            logger.info(f"Dataset cargado con {len(self.qa_pairs)} pares pregunta-respuesta.")
+def load_dataset(path, sample_size=10000):
+    """Carga el dataset desde el CSV."""
+    global dataset
+    try:
+        df = pd.read_csv(path, header=None)
+        # Usar las columnas 1 (pregunta) y 3 (respuesta)
+        df_cleaned = df[[1, 3]].dropna()
+        df_cleaned.columns = ['pregunta', 'respuesta']
         
-    def load_qa_pairs(self):
-        """Carga pares de pregunta-respuesta del dataset"""
+        # Tomar una muestra si el dataset es muy grande, o usarlo completo si es menor
+        if len(df_cleaned) > sample_size:
+            log.info(f"Tomando muestra de {sample_size} registros del dataset.")
+            dataset = list(df_cleaned.sample(n=sample_size).itertuples(index=False, name=None))
+        else:
+            log.info(f"Usando dataset completo con {len(df_cleaned)} registros.")
+            dataset = list(df_cleaned.itertuples(index=False, name=None))
+            
+        log.info(f"Dataset cargado con {len(dataset)} pares pregunta-respuesta.")
+        
+    except FileNotFoundError:
+        log.error(f"Error: No se encontró el archivo dataset en {path}")
+        exit(1)
+    except Exception as e:
+        log.error(f"Error al cargar el dataset: {e}")
+        exit(1)
+
+def get_random_question():
+    """Obtiene una tupla (pregunta, respuesta) aleatoria del dataset."""
+    return random.choice(dataset)
+
+def connect_to_kafka():
+    """Intenta conectarse a Kafka como Productor con reintentos."""
+    log.info(f"Intentando conectar a Kafka en {KAFKA_BROKER}...")
+    producer = None
+    retries = 10
+    while retries > 0:
         try:
-            df = pd.read_csv(DATASET_PATH, header=None)
-            logger.info(f"Dataset cargado: {len(df)} filas, {len(df.columns)} columnas")
-            
-            if len(df.columns) == 4:
-                questions = df.iloc[:, 1].dropna().tolist()  
-                answers = df.iloc[:, 3].dropna().tolist()    
-                logger.info("Usando columnas 1 (pregunta) y 3 (respuesta)")
-            elif len(df.columns) >= 3:
-                questions = df.iloc[:, 1].dropna().tolist()
-                answers = df.iloc[:, 2].dropna().tolist()
-                logger.info("Usando columnas 1 y 2")
-            else:
-                questions = df.iloc[:, 0].dropna().tolist()
-                answers = df.iloc[:, 1].dropna().tolist()
-            
-            qa_pairs = list(zip(questions, answers))
-            logger.info(f"Se cargaron {len(qa_pairs)} pares pregunta-respuesta")
-            return qa_pairs[:10000]
-                
-        except Exception as e:
-            logger.error(f"Error cargando dataset: {e}")
-            return [
-                ("What is a distributed system?", "A system with multiple components on different computers"),
-                ("What is cache memory?", "Fast memory that stores frequently accessed data")
-            ]
-    
-    def send_question(self, question: str, correct_answer: str, distribution: str):
-        """Envía una pregunta junto con su respuesta correcta y distribución al cache service"""
-        try:
-            log_question = (question[:60] + '...') if len(question) > 60 else question
-            
-            response = requests.post(
-                CACHE_SERVICE_URL, 
-                json={
-                    "question": question,
-                    "correct_answer": correct_answer,
-                    "distribution": distribution  
-                }, 
-                timeout=30
+            # Serializamos el valor del mensaje como JSON y lo codificamos a utf-8
+            producer = KafkaProducer(
+                bootstrap_servers=KAFKA_BROKER,
+                value_serializer=lambda v: json.dumps(v).encode('utf-8')
             )
-            
-            if response.status_code == 200:
-                result = response.json()
-                source = result.get('source', 'unknown').upper()
-                
-                if 'CACHE' in source:
-                    logger.info(f"CACHE HIT! Respuesta obtenida desde {source}.")
-                else:
-                    score = result.get('quality_score', 'N/A')
-                    logger.info(f"CACHE MISS. Respuesta obtenida desde {source} con Score: {score}")
-            else:
-                logger.error(f"HTTP Error {response.status_code}: {response.text}")
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"No se pudo conectar al servicio de cache: {e}")
-        
-    def get_interarrival_time(self, distribution: TrafficDistribution, phase: str = "normal"):
-        if distribution == TrafficDistribution.UNIFORM:
-            return random.uniform(1.0, 5.0)
-        elif distribution == TrafficDistribution.EXPONENTIAL:
-            if phase == "high":
-                return np.random.exponential(scale=1.5)
-            else:
-                return np.random.exponential(scale=3.0)
-        return 0 
+            log.info("Conexión con Kafka exitosa.")
+            return producer
+        except NoBrokersAvailable:
+            log.warning(f"No se pudo conectar a Kafka. Reintentando en 10 segundos... ({retries} intentos restantes)")
+            retries -= 1
+            time.sleep(10)
+    
+    log.error("No se pudo establecer conexión con Kafka después de varios intentos. Saliendo.")
+    exit(1)
 
-def simulate_uniform_distribution(generator: TrafficGenerator, duration_minutes: int = 10):
-    logger.info("INICIANDO DISTRIBUCION UNIFORME - Trafico constante")
-    logger.info("Justificacion: Simula usuarios regulares con comportamiento predecible")
-    
-    end_time = time.time() + (duration_minutes * 60)
-    request_count = 0
-    
-    while time.time() < end_time:
-        question, correct_answer = random.choice(generator.qa_pairs)
-        generator.send_question(question, correct_answer, "UNIFORM")  
-        request_count += 1
-        
-        sleep_time = generator.get_interarrival_time(TrafficDistribution.UNIFORM)
-        time.sleep(sleep_time)
-    
-    logger.info(f"Distribucion Uniforme completada: {request_count} solicitudes en {duration_minutes} minutos")
+def send_to_kafka(producer, question, best_answer):
+    """Envía el mensaje al topic de Kafka."""
+    message = {
+        'id_pregunta': str(random.randint(10000, 99999)), # Añadimos un ID para trazabilidad
+        'pregunta': question,
+        'respuesta_original': best_answer
+    }
+    try:
+        producer.send(KAFKA_TOPIC, message)
+        log.info(f"Mensaje enviado a '{KAFKA_TOPIC}': {question[:50]}...")
+    except Exception as e:
+        log.error(f"Error al enviar mensaje a Kafka: {e}")
 
-def simulate_exponential_distribution(generator: TrafficGenerator, duration_minutes: int = 10):
-    logger.info("INICIANDO DISTRIBUCION EXPONENCIAL - Trafico realista")
-    logger.info("Justificacion: Modela trafico web real con periodos de alta/baja demanda")
-    
-    end_time = time.time() + (duration_minutes * 60)
-    request_count = 0
-    phase_duration = 60
-    last_phase_change = time.time()
-    current_phase = "normal"
-    
-    while time.time() < end_time:
-        if time.time() - last_phase_change > phase_duration:
-            current_phase = "high" if current_phase == "normal" else "normal"
-            last_phase_change = time.time()
-            logger.info(f"Cambiando a fase: {current_phase.upper()}")
+def generate_uniform_traffic(producer, duration_sec):
+    """Genera tráfico con una tasa de arribo constante (distribución uniforme)."""
+    # MODIFICADO: Cambiado de 2 segundos a 7 segundos para respetar la cuota
+    log.info("Iniciando generación de tráfico UNIFORME (1 consulta cada 7 segundos - adaptado a cuota).")
+    start_time = time.time()
+    while time.time() - start_time < duration_sec:
+        question, best_answer = get_random_question()
+        send_to_kafka(producer, question, best_answer)
+        time.sleep(7)  # Tasa constante (1 req / 7 seg < 10 req / 60 seg)
+
+def generate_exponential_traffic(producer, duration_sec):
+    """Genera tráfico con tasa de arribo variable (distribución exponencial)."""
+    # MODIFICADO: Cambiado de 2 segundos a 7 segundos para respetar la cuota
+    log.info("Iniciando generación de tráfico EXPONENCIAL (tasa media 7 seg - adaptado a cuota).")
+    start_time = time.time()
+    while time.time() - start_time < duration_sec:
+        question, best_answer = get_random_question()
+        send_to_kafka(producer, question, best_answer)
         
-        question, correct_answer = random.choice(generator.qa_pairs)
-        generator.send_question(question, correct_answer, "EXPONENTIAL")  
-        request_count += 1
-        
-        sleep_time = generator.get_interarrival_time(TrafficDistribution.EXPONENTIAL, current_phase)
-        time.sleep(sleep_time)
-    
-    logger.info(f"Distribucion Exponencial completada: {request_count} solicitudes en {duration_minutes} minutos")
+        # Tiempo de espera basado en distribución exponencial (media de 7 seg)
+        wait_time = np.random.exponential(scale=7.0)
+        time.sleep(wait_time)
 
 def main():
-    logger.info("Iniciando Generador de Trafico con Multiples Distribuciones")
-    logger.info("Esperando 20 segundos para que todos los servicios se inicien...")
+    log.info("Iniciando Generador de Tráfico (Productor Kafka)...")
+    
+    # 1. Esperar un poco para que Kafka esté listo (opcional pero recomendado)
+    log.info("Esperando 20 segundos para que Kafka y Zookeeper se inicien...")
     time.sleep(20)
 
-    generator = TrafficGenerator()
+    # 2. Conectar a Kafka
+    producer = connect_to_kafka()
 
-    if not generator.qa_pairs:
-        logger.error("No se encontraron pares pregunta-respuesta para enviar. Saliendo.")
+    # 3. Cargar Dataset
+    load_dataset(DATASET_PATH)
+    if not dataset:
+        log.error("No se pudo cargar el dataset. Terminando.")
         return
 
+    # 4. Iniciar simulación de tráfico
+    duration_sec = SIMULATION_TIME_MIN * 60
+    log.info(f"Iniciando simulación por {SIMULATION_TIME_MIN} minutos.")
+    
     try:
-        logger.info("\n" + "="*60)
-       
-        if TRAFFIC_DISTRIBUTION_CHOICE == TrafficDistribution.UNIFORM.value:
-            simulate_uniform_distribution(generator, duration_minutes=10)  
-        elif TRAFFIC_DISTRIBUTION_CHOICE == TrafficDistribution.EXPONENTIAL.value:
-            simulate_exponential_distribution(generator, duration_minutes=10)  
+        if TRAFFIC_DISTRIBUTION == "uniform":
+            generate_uniform_traffic(producer, duration_sec)
+        elif TRAFFIC_DISTRIBUTION == "exponential":
+            generate_exponential_traffic(producer, duration_sec)
         else:
-            logger.error(f"Distribución '{TRAFFIC_DISTRIBUTION_CHOICE}' no reconocida. Ejecutando Uniforme por defecto.")
-            simulate_uniform_distribution(generator, duration_minutes=10)
-            
-        logger.info("\nGeneración de tráfico completada exitosamente!")
-        
-    except KeyboardInterrupt:
-        logger.info("Generacion de trafico detenida por el usuario.")
-    except Exception as e:
-        logger.error(f"Error inesperado: {e}")
+            log.warning(f"Distribución '{TRAFFIC_DISTRIBUTION}' no reconocida. Usando 'uniforme'.")
+            generate_uniform_traffic(producer, duration_sec)
 
-if __name__ == '__main__':
+    except KeyboardInterrupt:
+        log.info("Simulación detenida manualmente.")
+    finally:
+        log.info("Simulación terminada. Cerrando productor de Kafka.")
+        producer.flush() # Asegura que todos los mensajes pendientes se envíen
+        producer.close()
+
+if __name__ == "__main__":
     main()
