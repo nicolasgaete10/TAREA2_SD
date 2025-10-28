@@ -96,11 +96,10 @@ services:
   # Este NUEVO servicio reemplaza a 'score_service' y 'cache_service'
   # Será un Consumidor de Kafka
   procesador_llm:
-    # Deberás crear este nuevo directorio 'procesador_llm'
     build: ./procesador_llm
     container_name: procesador_llm
     environment:
-      - GEMINI_API_KEY=AIzaSyAeTWWeT7TeU7aDA-TsryxG4IwTn6lkxIw
+      - GEMINI_API_KEY={clave}
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_INPUT_TOPIC=preguntas_pendientes
       - KAFKA_OUTPUT_TOPIC=resultados_procesados
