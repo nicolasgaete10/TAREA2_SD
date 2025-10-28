@@ -90,7 +90,7 @@ services:
     volumes:
       - ./Data:/app/Data
     depends_on:
-      - kafka # Depende de Kafka para poder producir mensajes
+      - kafka 
     restart: on-failure
 
   # Este NUEVO servicio reemplaza a 'score_service' y 'cache_service'
