@@ -1,14 +1,12 @@
-# Usar imagen base de Python ligera
-FROM python:3.9-slim
+FROM flink:1.14.3-scala_2.12-java11
 
-# Establecer directorio de trabajo
-WORKDIR /app
+# Establecer directorio de trabajo (un buen lugar para scripts de usuario)
+WORKDIR /opt/flink/usrlib
 
-# Instalar solo las dependencias necesarias
-RUN pip install --no-cache-dir kafka-python==2.0.2
-
-# Copiar el script del quality checker
+# Copiar los requerimientos y el script del job
+COPY requirements.txt .
 COPY flink.py .
 
-# Comando para ejecutar
-CMD ["python", "flink.py"]
+# Instalar las dependencias de Python (apache-flink)
+# La imagen base de Flink ya incluye 'pip'
+RUN pip install --no-cache-dir -r requirements.txt

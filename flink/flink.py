@@ -1,170 +1,161 @@
-"""
-Job simple de Quality Checker usando solo Kafka (sin PyFlink).
-
-Este enfoque es más simple y evita problemas de compilación de PyFlink.
-Funciona exactamente igual, pero usa directamente kafka-python.
-"""
-
 import os
 import json
 import logging
-import time
-from kafka import KafkaConsumer, KafkaProducer
-from kafka.errors import NoBrokersAvailable
+from pyflink.datastream import StreamExecutionEnvironment, ProcessFunction
+from pyflink.datastream.connectors.kafka import KafkaSource, KafkaSink, KafkaOffsetsInitializer
+from pyflink.common.serialization import SimpleStringSchema
+from pyflink.common.typeinfo import Types
+from pyflink.datastream.state import ValueStateDescriptor
 
-# Configuración de logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("QualityChecker")
+# --- Configuración de Logging ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("PyFlinkQualityChecker")
 
-# Variables de entorno
+# --- Variables de Entorno ---
 KAFKA_BROKER = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'kafka:29092')
 INPUT_TOPIC = os.environ.get('FLINK_INPUT_TOPIC', 'resultados_procesados')
 OUTPUT_VALIDATED_TOPIC = os.environ.get('FLINK_OUTPUT_VALIDATED_TOPIC', 'resultados_validados')
 OUTPUT_RETRY_TOPIC = os.environ.get('FLINK_OUTPUT_RETRY_TOPIC', 'preguntas_pendientes')
 
-# Umbral de calidad y límite de reintentos
 QUALITY_THRESHOLD = float(os.environ.get('QUALITY_THRESHOLD', '0.3'))
 MAX_RETRIES = int(os.environ.get('MAX_RETRIES', '2'))
 
-
-def connect_to_kafka_consumer():
-    """Conecta a Kafka como consumidor con reintentos."""
-    logger.info(f"Conectando a Kafka (Consumer) en {KAFKA_BROKER}...")
-    retries = 10
-    
-    while retries > 0:
-        try:
-            consumer = KafkaConsumer(
-                INPUT_TOPIC,
-                bootstrap_servers=KAFKA_BROKER,
-                group_id='quality-checker-group',
-                value_deserializer=lambda v: json.loads(v.decode('utf-8')),
-                auto_offset_reset='earliest',
-                enable_auto_commit=True
-            )
-            logger.info(f"Conexión exitosa. Escuchando: {INPUT_TOPIC}")
-            return consumer
-        except NoBrokersAvailable:
-            logger.warning(f" Kafka no disponible. Reintentando... ({retries} intentos)")
-            retries -= 1
-            time.sleep(10)
-    
-    logger.error("No se pudo conectar a Kafka. Saliendo.")
-    exit(1)
+retry_tag = "retry-output"
 
 
-def connect_to_kafka_producer():
-    """Conecta a Kafka como productor con reintentos."""
-    logger.info(f"Conectando a Kafka (Producer) en {KAFKA_BROKER}...")
-    retries = 10
-    
-    while retries > 0:
-        try:
-            producer = KafkaProducer(
-                bootstrap_servers=KAFKA_BROKER,
-                value_serializer=lambda v: json.dumps(v).encode('utf-8')
-            )
-            logger.info("Productor conectado")
-            return producer
-        except NoBrokersAvailable:
-            logger.warning(f"Kafka no disponible. Reintentando... ({retries} intentos)")
-            retries -= 1
-            time.sleep(10)
-    
-    logger.error("No se pudo conectar a Kafka. Saliendo.")
-    exit(1)
-
-
-def evaluate_quality(data):
+class QualityCheckFunction(ProcessFunction):
     """
-    Evalúa la calidad de una respuesta y decide qué hacer.
-    
-    Returns:
-        tuple: (topic_destino, mensaje)
+    Función de Flink que implementa la lógica de negocio.
+    - El stream principal (ctx.output) será para los mensajes validados.
+    - El stream lateral (ctx.output(retry_tag)) será para los reintentos.
     """
-    try:
-        score = data.get('score_rouge_l', 0.0)
-        retry_count = data.get('retry_count', 0)
-        pregunta = data.get('pregunta', 'N/A')
-        
-        logger.info(f"Evaluando: '{pregunta[:50]}...' | Score: {score:.4f} | Reintentos: {retry_count}")
-        
-        # ¿Score suficientemente bueno?
-        if score >= QUALITY_THRESHOLD:
-            logger.info(f" APROBADO - Score {score:.4f} >= {QUALITY_THRESHOLD}")
-            data['status'] = 'validated'
-            return (OUTPUT_VALIDATED_TOPIC, data)
-        
-        # Score bajo
-        if retry_count < MAX_RETRIES:
-            logger.warning(f"RECHAZADO - Score {score:.4f} < {QUALITY_THRESHOLD}. Reintento {retry_count + 1}/{MAX_RETRIES}")
+    def __init__(self, threshold, max_retries):
+        self.threshold = threshold
+        self.max_retries = max_retries
+        self._retry_tag = retry_tag 
+        self.flink_retry_tag = None 
+
+    def open(self, runtime_context):
+        self.flink_retry_tag = runtime_context.get_side_output(self._retry_tag)
+
+    def process_element(self, value, ctx: 'ProcessFunction.Context'):
+        """Procesa cada mensaje que llega del tópico de resultados."""
+        try:
+            data = json.loads(value)
+            score = data.get('score_rouge_l', 0.0)
+            retry_count = data.get('retry_count', 0)
+            pregunta = data.get('pregunta', 'N/A')
+
+            logger.info(f"Evaluando: '{pregunta[:50]}...' | Score: {score:.4f} | Reintentos: {retry_count}")
+
             
-            retry_message = {
-                'id_pregunta': data.get('id_pregunta', 'N/A'),
-                'pregunta': pregunta,
-                'respuesta_original': data.get('respuesta_original', ''),
-                'retry_count': retry_count + 1,
-                'previous_score': score,
-                'reason': 'low_quality_score'
-            }
-            return (OUTPUT_RETRY_TOPIC, retry_message)
-        
-        # Se agotaron los reintentos
-        logger.warning(f" LÍMITE ALCANZADO - Score {score:.4f}. Guardando de todas formas.")
-        data['status'] = 'validated_max_retries'
-        data['quality_warning'] = True
-        return (OUTPUT_VALIDATED_TOPIC, data)
-        
-    except Exception as e:
-        logger.error(f"❌ Error evaluando calidad: {e}", exc_info=True)
-        return (None, None)
+            # 1. ¿Score suficientemente bueno?
+            if score >= self.threshold:
+                logger.info(f" APROBADO - Score {score:.4f} >= {self.threshold}")
+                data['status'] = 'validated'
+                # Enviar al stream PRINCIPAL (validados)
+                yield json.dumps(data)
+            
+            # 2. Score bajo, pero aún quedan reintentos
+            elif retry_count < self.max_retries:
+                logger.warning(f"RECHAZADO - Score {score:.4f} < {self.threshold}. Reintento {retry_count + 1}/{self.max_retries}")
+                
+                # Prepara el mensaje para el reintento
+                retry_message = {
+                    'id_pregunta': data.get('id_pregunta', 'N/A'),
+                    'pregunta': pregunta,
+                    'respuesta_original': data.get('respuesta_original', ''),
+                    'retry_count': retry_count + 1,
+                    'previous_score': score,
+                    'reason': 'low_quality_score'
+                }
+                
+                # Enviar al stream LATERAL (reintentos)
+                ctx.output(self.flink_retry_tag, json.dumps(retry_message))
+
+            # 3. Score bajo Y se agotaron los reintentos
+            else:
+                logger.warning(f" LÍMITE ALCANZADO - Score {score:.4f}. Guardando de todas formas.")
+                data['status'] = 'validated_max_retries'
+                data['quality_warning'] = True
+                
+                # Enviar al stream PRINCIPAL (validados)
+                yield json.dumps(data)
+                
+        except Exception as e:
+            logger.error(f"❌ Error evaluando calidad: {e}", exc_info=True)
+            # Opcional: enviar a un "dead-letter-queue" de Flink
 
 
-def main():
-    """Función principal del quality checker."""
-    logger.info("=" * 60)
-    logger.info("Iniciando Quality Checker Job")
-    logger.info(f"Umbral de calidad: {QUALITY_THRESHOLD}")
-    logger.info(f"Máximo de reintentos: {MAX_RETRIES}")
-    logger.info(f"Kafka Broker: {KAFKA_BROKER}")
-    logger.info("=" * 60)
+def run_flink_job():
+    """Define y ejecuta el Job de PyFlink."""
     
-    # Esperar a que Kafka esté listo
-    logger.info("Esperando 30 segundos para que Kafka esté listo...")
-    time.sleep(30)
+    logger.info("Iniciando Job de PyFlink Quality Checker...")
+    env = StreamExecutionEnvironment.get_execution_environment()
+
+    # --- 1. Definir el Source (de dónde leemos) ---
+    kafka_source = KafkaSource.builder() \
+        .set_bootstrap_servers(KAFKA_BROKER) \
+        .set_topics(INPUT_TOPIC) \
+        .set_group_id("pyflink-quality-checker-group") \
+        .set_starting_offsets(KafkaOffsetsInitializer.earliest()) \
+        .set_value_only_deserializer(SimpleStringSchema()) \
+        .build()
+
+    # --- 2. Definir los Sinks (dónde escribimos) ---
     
-    # Conectar a Kafka
-    consumer = connect_to_kafka_consumer()
-    producer = connect_to_kafka_producer()
+    # Sink para mensajes validados
+    validated_sink = KafkaSink.builder() \
+        .set_bootstrap_servers(KAFKA_BROKER) \
+        .set_record_serializer(
+            KafkaRecordSerializationSchema.builder()
+                .set_topic(OUTPUT_VALIDATED_TOPIC)
+                .set_value_serialization_schema(SimpleStringSchema())
+                .build()
+        ) \
+        .build()
+
+    # Sink para mensajes de reintento
+    retry_sink = KafkaSink.builder() \
+        .set_bootstrap_servers(KAFKA_BROKER) \
+        .set_record_serializer(
+            KafkaRecordSerializationSchema.builder()
+                .set_topic(OUTPUT_RETRY_TOPIC)
+                .set_value_serialization_schema(SimpleStringSchema())
+                .build()
+        ) \
+        .build()
+
+    # --- 3. Construir el Grafo de Flujo ---
     
-    logger.info("Quality Checker listo. Esperando mensajes...")
+    # Leer de Kafka
+    data_stream = env.from_source(kafka_source, "Kafka Source (Resultados)")
+
+    # Aplicar la lógica de procesamiento
+    # Necesitamos el OutputTag aquí
+    _retry_tag_typed = Types.STRING()
     
-    # Bucle principal
-    try:
-        for message in consumer:
-            data = message.value
-            
-            # Evaluar calidad
-            topic, processed_data = evaluate_quality(data)
-            
-            if topic and processed_data:
-                # Enviar al topic correspondiente
-                producer.send(topic, processed_data)
-                producer.flush()
-                logger.info(f"Mensaje enviado a '{topic}'")
-            
-    except KeyboardInterrupt:
-        logger.info(" Detención manual")
-    except Exception as e:
-        logger.error(f"Error crítico: {e}", exc_info=True)
-    finally:
-        consumer.close()
-        producer.close()
-        logger.info("Quality Checker detenido")
+    # Procesar y dividir el stream
+    main_validated_stream = data_stream.process(
+        QualityCheckFunction(QUALITY_THRESHOLD, MAX_RETRIES),
+        output_type=Types.STRING() # Tipo del stream principal
+    ).name("Quality Check & Split")
+
+    # Obtener el stream lateral (de reintentos) usando el tag
+    retry_stream = main_validated_stream.get_side_output(retry_tag, _retry_tag_typed)
+
+    # --- 4. Enviar los streams a sus Sinks ---
+    main_validated_stream.sink_to(validated_sink).name("Sink (Validados)")
+    retry_stream.sink_to(retry_sink).name("Sink (Reintentos)")
+
+    # --- 5. Ejecutar el Job ---
+    logger.info("Job construido. Ejecutando...")
+    env.execute("Kafka Quality Checker Job")
 
 
 if __name__ == "__main__":
-    main()
+    # Necesitamos importar los conectores de Kafka
+    # Esta es una forma de asegurar que Flink cargue los JARs correctos
+    from pyflink.datastream.connectors.kafka import KafkaRecordSerializationSchema
+    
+    run_flink_job()

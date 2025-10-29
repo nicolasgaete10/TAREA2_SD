@@ -14,7 +14,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user"]
+      test: ["CMD-SHELL", "pg_isready -U user -d yahoo_respuestas"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -93,12 +93,25 @@ services:
     depends_on:
       - flink-jobmanager
 
-  # ========================================
-  # 🆕 NUEVO: Job de Flink para Quality Checking
-  # ========================================
   flink-quality-checker:
-    build: ./flink
-    container_name: flink_quality_checker
+    build: ./flink  # Construye la imagen del Dockerfile anterior
+    container_name: flink_job_submitter # Le cambié el nombre para más claridad
+    depends_on:
+      flink-jobmanager:
+        condition: service_started # Esperar a que el jobmanager inicie
+    
+    # Este es el nuevo comando. Se conecta al cluster y envía el job.
+    command: >
+      bash -c "
+        echo '--- Esperando 20s a que Flink JobManager esté listo... ---';
+        sleep 20;
+        echo '--- Enviando Job de PyFlink (quality_checker.py) al Cluster... ---';
+        flink run \
+          --python /opt/flink/usrlib/quality_checker.py \
+          --jobmanager flink-jobmanager:8081
+      "
+    
+    # Las variables de entorno se pasan al script de PyFlink
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - FLINK_INPUT_TOPIC=resultados_procesados
@@ -106,10 +119,7 @@ services:
       - FLINK_OUTPUT_RETRY_TOPIC=preguntas_pendientes
       - QUALITY_THRESHOLD=0.3
       - MAX_RETRIES=2
-    depends_on:
-      kafka:
-        condition: service_healthy
-    restart: on-failure
+    restart: on-failure # Si el envío falla, lo reintenta
 
   # --- 4. Servicios de Aplicación ---
 
@@ -136,8 +146,11 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_INPUT_TOPIC=preguntas_pendientes
-      - KAFKA_OUTPUT_TOPIC=resultados_procesados
+      - KAFKA_OUTPUT_TOPIC=resultados_procesados # Tópico de éxito
       - REDIS_URL=redis://redis_cache:6379
+      # --- ⬇️ VARIABLES NUEVAS/CORREGIDAS ⬇️ ---
+      - KAFKA_RETRY_TOPIC_CUOTA=preguntas_reintento_cuota
+      - KAFKA_DEAD_LETTER_TOPIC=preguntas_error_grave
     volumes:
       - ./Data:/app/Data
     depends_on:
@@ -147,9 +160,20 @@ services:
         condition: service_healthy
     restart: on-failure
 
-  # ========================================
-  # 🆕 NUEVO: Consumidor de Almacenamiento
-  # ========================================
+
+  retry_worker:
+    build: ./retry 
+    container_name: retry
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_INPUT_TOPIC=preguntas_reintento_cuota
+      - KAFKA_OUTPUT_TOPIC=preguntas_pendientes
+      - RETRY_DELAY_SECONDS=60
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
   almacenamiento_kafka:
     build: ./almacenamiento_kafka
     container_name: almacenamiento_kafka
@@ -175,6 +199,19 @@ services:
       postgres:
         condition: service_healthy
     restart: on-failure
+
+  # ========================================
+  # 🆕 OPCIONAL: UI para Kafka
+  # ========================================
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    container_name: kafdrop
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: "kafka:29092"
+    depends_on:
+      - kafka
 
 volumes:
   postgres_data:
