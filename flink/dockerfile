@@ -1,0 +1,25 @@
+FROM flink:1.14.3-scala_2.12-java11
+
+# Instalar Python y pip
+USER root
+RUN apt-get update && \
+    apt-get install -y python3 python3-pip && \
+    rm -rf /var/lib/apt/lists/*
+
+# Crear un enlace simbólico para python
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# Instalar PyFlink y dependencias de Kafka
+RUN pip3 install --no-cache-dir apache-flink==1.14.3 kafka-python==2.0.2
+
+# Crear directorio para el job
+WORKDIR /opt/flink/jobs
+
+# Copiar el script del job
+COPY flink.py .
+
+# Volver al usuario flink
+USER flink
+
+# El comando se especificará en docker-compose
+CMD ["python3", "flink.py"]

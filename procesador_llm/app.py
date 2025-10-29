@@ -176,12 +176,21 @@ def main():
     log.info("=== Servicio listo y esperando mensajes ===")
 
     # 2. Bucle infinito de consumo
+# 2. Bucle infinito de consumo
     try:
         for message in consumer:
             data = message.value
             pregunta = data['pregunta']
             respuesta_original = data['respuesta_original']
-            log.info(f"Mensaje recibido: {pregunta[:50]}...")
+            
+            # NUEVO: Obtener el contador de reintentos del mensaje
+            retry_count = data.get('retry_count', 0)
+            previous_score = data.get('previous_score', None)
+            
+            if retry_count > 0:
+                log.info(f"REINTENTO #{retry_count} - Mensaje recibido: {pregunta[:50]}... (Score anterior: {previous_score:.4f})")
+            else:
+                log.info(f"Mensaje recibido: {pregunta[:50]}...")
 
             response_llm = None
             cache_status = "MISS"
@@ -204,8 +213,6 @@ def main():
                 # 5. Guardar en Cache si la respuesta es válida
                 if response_llm != MOCK_RESPONSE:
                     try:
-                        # La política de evicción (LRU) y tamaño (256mb)
-                        # se configuran en el docker-compose.
                         redis_client.set(pregunta, response_llm)
                         log.info("Respuesta guardada en caché.")
                     except redis.exceptions.RedisError as e:
@@ -214,7 +221,7 @@ def main():
             # 6. Calcular Score
             score = calculate_rouge_score(response_llm, respuesta_original)
 
-            # 7. Preparar mensaje de salida
+            # 7. Preparar mensaje de salida - ACTUALIZADO con retry_count
             output_data = {
                 'id_pregunta': data.get('id_pregunta', 'N/A'),
                 'pregunta': pregunta,
@@ -222,13 +229,14 @@ def main():
                 'respuesta_llm': response_llm,
                 'score_rouge_l': score,
                 'cache_status': cache_status,
+                'retry_count': retry_count,  # NUEVO: Incluir el contador de reintentos
                 'timestamp_procesado': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
             }
 
             # 8. Producir mensaje de resultado
             producer.send(OUTPUT_TOPIC, value=output_data)
-            log.info(f"Resultado enviado a '{OUTPUT_TOPIC}'. Score: {score:.4f}, Cache: {cache_status}")
-            producer.flush() # Asegurar envío inmediato (opcional)
+            log.info(f"Resultado enviado a '{OUTPUT_TOPIC}'. Score: {score:.4f}, Cache: {cache_status}, Reintentos: {retry_count}")
+            producer.flush()
 
     except KeyboardInterrupt:
         log.info("Detención manual solicitada. Cerrando conexiones...")

@@ -1,0 +1,11 @@
+este es el flujo para probar los servicios por mientras 
+
+Terminal 1
+
+docker-compose up -d zookeeper kafka redis
+
+docker-compose up --build procesador_llm
+
+Terminal 2
+
+docker-compose up --build traffic_generator

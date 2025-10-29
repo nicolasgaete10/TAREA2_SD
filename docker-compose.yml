@@ -2,7 +2,6 @@ version: "3.8"
 
 services:
   # --- 1. Dependencias Base (Persistencia) ---
-  # (Sin cambios de la Tarea 1)
   postgres:
     image: postgres:13
     container_name: postgres_db
@@ -14,6 +13,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:6-alpine
@@ -21,6 +25,11 @@ services:
     ports:
       - "6379:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # --- 2. Tarea 2: Bus de Mensajes (Kafka) ---
   zookeeper:
@@ -31,16 +40,20 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   kafka:
     image: confluentinc/cp-kafka:7.0.1
     container_name: kafka
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
-      # Puerto para acceder a Kafka DESDE FUERA de la red de Docker (ej. tu máquina local)
       - "9092:9092"
-      # Puerto para la comunicación INTERNA entre contenedores de Docker
       - "29092:29092"
     environment:
       KAFKA_BROKER_ID: 1
@@ -50,65 +63,120 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
 
   # --- 3. Tarea 2: Procesamiento de Flujos (Flink) ---
   flink-jobmanager:
     image: flink:1.14.3-scala_2.12-java11
     container_name: flink_jobmanager
     ports:
-      - "8081:8081" # Interfaz web de Flink
+      - "8081:8081"
     command: jobmanager
     environment:
-      - JOB_MANAGER_RPC_ADDRESS=flink_jobmanager
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
     volumes:
       - flink_jobmanager_data:/opt/flink/data
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
 
   flink-taskmanager:
     image: flink:1.14.3-scala_2.12-java11
     container_name: flink_taskmanager
     command: taskmanager
     environment:
-      - JOB_MANAGER_RPC_ADDRESS=flink_jobmanager
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
     depends_on:
       - flink-jobmanager
-    scale: 1 # Puedes aumentar este número para tener más workers
 
-  # --- 4. Servicios de Aplicación (Modificados para Tarea 2) ---
+  # ========================================
+  # 🆕 NUEVO: Job de Flink para Quality Checking
+  # ========================================
+  flink-quality-checker:
+    build: ./flink_job
+    container_name: flink_quality_checker
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - FLINK_INPUT_TOPIC=resultados_procesados
+      - FLINK_OUTPUT_VALIDATED_TOPIC=resultados_validados
+      - FLINK_OUTPUT_RETRY_TOPIC=preguntas_pendientes
+      - QUALITY_THRESHOLD=0.3
+      - MAX_RETRIES=2
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
 
-  # Este servicio ahora será nuestro Productor de Kafka
+  # --- 4. Servicios de Aplicación ---
+
   traffic_generator:
     build: ./traffic_generator
     container_name: traffic_generator
     environment:
-      # Dirección de Kafka (interna de Docker)
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      # Topic donde se publicarán las preguntas
       - KAFKA_TOPIC=preguntas_pendientes
       - DATASET_PATH=/app/Data/test.csv
+      - TRAFFIC_DISTRIBUTION=uniform
+      - SIMULATION_TIME_MIN=10
     volumes:
       - ./Data:/app/Data
     depends_on:
-      - kafka 
+      kafka:
+        condition: service_healthy
     restart: on-failure
 
-  # Este NUEVO servicio reemplaza a 'score_service' y 'cache_service'
-  # Será un Consumidor de Kafka
   procesador_llm:
     build: ./procesador_llm
     container_name: procesador_llm
     environment:
-      - GEMINI_API_KEY={clave}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_INPUT_TOPIC=preguntas_pendientes
       - KAFKA_OUTPUT_TOPIC=resultados_procesados
       - REDIS_URL=redis://redis_cache:6379
     volumes:
-      - ./Data:/app/Data # Si reutiliza la lógica de score
+      - ./Data:/app/Data
     depends_on:
-      - kafka
-      - redis
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+
+  # ========================================
+  # 🆕 NUEVO: Consumidor de Almacenamiento
+  # ========================================
+  storage_consumer:
+    build: ./storage_consumer
+    container_name: storage_consumer
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_INPUT_TOPIC=resultados_validados
+      - STORAGE_SERVICE_URL=http://almacenamiento:5005/save
+    depends_on:
+      kafka:
+        condition: service_healthy
+      almacenamiento:
+        condition: service_started
+    restart: on-failure
+
+  # ========================================
+  # 🆕 NUEVO: Servicio de Almacenamiento
+  # ========================================
+  almacenamiento:
+    build: ./almacenamiento
+    container_name: almacenamiento
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres_db:5432/yahoo_respuestas
+    ports:
+      - "5005:5005"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: on-failure
 
 volumes:
