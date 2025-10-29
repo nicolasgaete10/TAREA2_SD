@@ -97,7 +97,7 @@ services:
   # 🆕 NUEVO: Job de Flink para Quality Checking
   # ========================================
   flink-quality-checker:
-    build: ./flink_job
+    build: ./flink
     container_name: flink_quality_checker
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
@@ -150,9 +150,9 @@ services:
   # ========================================
   # 🆕 NUEVO: Consumidor de Almacenamiento
   # ========================================
-  storage_consumer:
-    build: ./storage_consumer
-    container_name: storage_consumer
+  almacenamiento_kafka:
+    build: ./almacenamiento_kafka
+    container_name: almacenamiento_kafka
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_INPUT_TOPIC=resultados_validados
@@ -164,9 +164,6 @@ services:
         condition: service_started
     restart: on-failure
 
-  # ========================================
-  # 🆕 NUEVO: Servicio de Almacenamiento
-  # ========================================
   almacenamiento:
     build: ./almacenamiento
     container_name: almacenamiento
