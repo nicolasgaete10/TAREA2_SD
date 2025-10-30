@@ -1,25 +1,56 @@
+# --- EN: flink/Dockerfile ---
+# (Reemplaza los pasos finales del Dockerfile con este código)
+
 FROM flink:1.14.3-scala_2.12-java11
 
 USER root
 
-# Instalar Python y dependencias
+# Instalar Python y dependencias de compilación
+# Agregamos python3-dev (ya lo tienes), cmake, pkg-config, build-essential (por pyarrow)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 \
         python3-pip \
-        python3-dev && \
-    rm -rf /var/lib/apt/lists/*
+        cmake \
+        pkg-config \
+        build-essential \
+        libarrow-dev \
+    && rm -rf /var/lib/apt/lists/*
+    
+# ⚠️ ADVERTENCIA: La instalación de libarrow-dev fallará a menos que hayas
+# añadido los repositorios de Apache Arrow como te indiqué antes.
+# Asumiré que ya tienes la parte del apt-repository solucionada en tu Dockerfile.
 
-RUN ln -sf /usr/bin/python3 /usr/bin/python
-
-# Actualizar pip
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel
+# -------------------------------------------------------------
+# ⬇️ NUEVOS PASOS DE INSTALACIÓN (Orden Específico) ⬇️
+# -------------------------------------------------------------
 
 WORKDIR /opt/flink/usrlib
 
 # Copiar requirements e instalar
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+
+# 1. Instalar dependencias clave que PYARROW necesita para compilar: NumPy y PyArrow
+# Instalamos la versión estable y fija de PyArrow (v14.0.0, una versión muy usada)
+# NOTA: Tienes que especificar PyArrow aquí porque PyFlink 1.14.3 no lo hace bien.
+RUN pip3 install --no-cache-dir numpy==1.22.3 pyarrow==14.0.0
+
+# 2. Instalar Flink (que ahora encontrará NumPy y PyArrow pre-instalados)
+# También instalamos el conector de Kafka de Flink (que debe coincidir con la versión 1.14.3)
+RUN pip3 install --no-cache-dir \
+    apache-flink==1.14.3 \
+    apache-flink-connector-kafka-2.12==1.14.3 \
+    # Incluimos Py4j y Beam (dependencias problemáticas de Flink) para asegurar el orden.
+    apache-beam==2.27.0 \
+    py4j==0.10.8.1
+
+# 3. Descargar el JAR del conector de Kafka (para Flink Java)
+RUN curl -L -o /opt/flink/lib/flink-connector-kafka.jar \
+    https://repo.maven.apache.org/maven2/org/apache/flink/flink-connector-kafka_2.12/1.14.3/flink-connector-kafka_2.12-1.14.3.jar
+
+# -------------------------------------------------------------
+# ⬆️ FIN DE LA SOLUCIÓN ⬆️
+# -------------------------------------------------------------
 
 # Copiar el script de Python
 COPY flink.py .

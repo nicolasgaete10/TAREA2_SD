@@ -10,7 +10,7 @@ from kafka.errors import NoBrokersAvailable
 import google.generativeai as genai 
 from google.api_core.exceptions import ResourceExhausted, InternalServerError 
 from google.generativeai.types import GenerationConfig, HarmCategory, HarmBlockThreshold 
-from rouge_scorer import rouge_scorer 
+from rouge_score import rouge_scorer
 
 # --- Configuración de Logging ---
 logging.basicConfig(
