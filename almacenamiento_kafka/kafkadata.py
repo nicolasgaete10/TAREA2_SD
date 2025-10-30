@@ -1,3 +1,12 @@
+"""
+Consumidor de Kafka que persiste los resultados validados en la base de datos.
+
+Este servicio:
+1. Consume mensajes del topic 'resultados_validados'
+2. Envía los datos al servicio de almacenamiento vía HTTP POST
+3. Maneja errores de conexión y reintenta si es necesario
+"""
+
 import os
 import time
 import json
@@ -35,14 +44,14 @@ def connect_to_kafka():
                 auto_offset_reset='earliest',
                 enable_auto_commit=True
             )
-            logger.info(f"Conexión con Kafka exitosa. Escuchando topic: {INPUT_TOPIC}")
+            logger.info(f"✅ Conexión con Kafka exitosa. Escuchando topic: {INPUT_TOPIC}")
             return consumer
         except NoBrokersAvailable:
-            logger.warning(f"No se pudo conectar a Kafka. Reintentando en 10 segundos... ({retries} intentos restantes)")
+            logger.warning(f"⚠️ No se pudo conectar a Kafka. Reintentando en 10 segundos... ({retries} intentos restantes)")
             retries -= 1
             time.sleep(10)
     
-    logger.error("No se pudo establecer conexión con Kafka. Saliendo.")
+    logger.error("❌ No se pudo establecer conexión con Kafka. Saliendo.")
     exit(1)
 
 
@@ -67,7 +76,7 @@ def save_to_storage(data):
         
         # Agregar información adicional si existe
         if data.get('status') == 'validated_max_retries':
-            logger.warning(f"Guardando respuesta que alcanzó el límite de reintentos")
+            logger.warning(f"⚠️ Guardando respuesta que alcanzó el límite de reintentos")
         
         # Enviar POST request
         response = requests.post(
@@ -80,17 +89,17 @@ def save_to_storage(data):
             logger.info(f"✅ Datos guardados exitosamente en almacenamiento")
             return True
         else:
-            logger.error(f"Error al guardar datos. Status code: {response.status_code}, Response: {response.text}")
+            logger.error(f"❌ Error al guardar datos. Status code: {response.status_code}, Response: {response.text}")
             return False
             
     except requests.exceptions.ConnectionError as e:
-        logger.error(f"Error de conexión con el servicio de almacenamiento: {e}")
+        logger.error(f"❌ Error de conexión con el servicio de almacenamiento: {e}")
         return False
     except requests.exceptions.Timeout as e:
-        logger.error(f"Timeout al conectar con el servicio de almacenamiento: {e}")
+        logger.error(f"❌ Timeout al conectar con el servicio de almacenamiento: {e}")
         return False
     except Exception as e:
-        logger.error(f"Error inesperado al guardar datos: {e}", exc_info=True)
+        logger.error(f"❌ Error inesperado al guardar datos: {e}", exc_info=True)
         return False
 
 
@@ -109,7 +118,7 @@ def main():
     # Conectar a Kafka
     consumer = connect_to_kafka()
     
-    logger.info("Storage Consumer listo. Esperando mensajes...")
+    logger.info("🚀 Storage Consumer listo. Esperando mensajes...")
     
     # Bucle principal de consumo
     try:
@@ -119,20 +128,20 @@ def main():
             score = data.get('score_rouge_l', 0.0)
             
             logger.info("-" * 60)
-            logger.info(f"Mensaje recibido: '{pregunta[:50]}...' | Score: {score:.4f}")
+            logger.info(f"📨 Mensaje recibido: '{pregunta[:50]}...' | Score: {score:.4f}")
             
             # Intentar guardar en la base de datos
             success = save_to_storage(data)
             
             if success:
-                logger.info(f"Procesamiento completado exitosamente")
+                logger.info(f"✅ Procesamiento completado exitosamente")
             else:
-                logger.warning(f"No se pudo guardar el mensaje. Se continuará con el siguiente.")
+                logger.warning(f"⚠️ No se pudo guardar el mensaje. Se continuará con el siguiente.")
             
     except KeyboardInterrupt:
-        logger.info("Detención manual solicitada. Cerrando conexiones...")
+        logger.info("⚠️ Detención manual solicitada. Cerrando conexiones...")
     except Exception as e:
-        logger.error(f"Error crítico en el bucle principal: {e}", exc_info=True)
+        logger.error(f"❌ Error crítico en el bucle principal: {e}", exc_info=True)
     finally:
         consumer.close()
         logger.info("👋 Storage Consumer detenido.")

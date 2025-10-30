@@ -1,6 +1,3 @@
-# Cliente de Python para Kafka
 kafka-python==2.0.2
-
-# Librerías para leer el dataset y generar distribuciones
 pandas==1.4.2
 numpy==1.22.3

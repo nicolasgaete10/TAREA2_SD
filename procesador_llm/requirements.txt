@@ -1,4 +1,5 @@
 kafka-python==2.0.2
 redis==4.3.4
 google-generativeai==0.7.1
-rouge-score==0.0.4
+rouge-score==0.1.1
+absl-py==1.4.0
