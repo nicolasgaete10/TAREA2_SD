@@ -1,12 +1,50 @@
+# --- EN: flink/Dockerfile ---
+
+# 1. Empezar con la misma imagen que tu cluster
 FROM flink:1.14.3-scala_2.12-java11
 
-# Establecer directorio de trabajo (un buen lugar para scripts de usuario)
+# 2. Cambiar a usuario ROOT para instalar paquetes
+USER root
+
+# 3. 💥 CAMBIO CLAVE 💥
+# Instalar pre-requisitos y AÑADIR EL REPOSITORIO DE APACHE ARROW
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        # Pre-requisitos para añadir repositorios
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release \
+    && rm -rf /var/lib/apt/lists/* && \
+    # Añadir GPG key de Apache Arrow
+    curl https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr '[:upper:]' '[:lower:]')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb -o apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb && \
+    apt-get install -y ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb && \
+    rm ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb && \
+    # Actualizar de nuevo AHORA que tenemos el repo de Arrow
+    apt-get update && \
+    # Instalar todo lo necesario: Python, build tools, y AHORA SÍ libarrow-dev
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        cmake \
+        pkg-config \
+        build-essential \
+        libarrow-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 4. Establecer directorio de trabajo
 WORKDIR /opt/flink/usrlib
 
-# Copiar los requerimientos y el script del job
+# 5. Copiar los archivos (como antes)
 COPY requirements.txt .
 COPY flink.py .
 
-# Instalar las dependencias de Python (apache-flink)
-# La imagen base de Flink ya incluye 'pip'
+# 6. Instalar 'numpy' PRIMERO
+RUN pip install --no-cache-dir numpy
+
+# 7. Instalar el resto de las dependencias (apache-flink -> pyarrow)
 RUN pip install --no-cache-dir -r requirements.txt
+
+# 8. Volver al usuario 'flink' por seguridad
+USER flink

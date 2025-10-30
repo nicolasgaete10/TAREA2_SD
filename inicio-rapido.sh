@@ -9,7 +9,7 @@ echo ""
 
 # Verificar .env
 if [ ! -f ".env" ]; then
-    echo "❌ ERROR: No se encontró .env"
+    echo "ERROR: No se encontró .env"
     echo "Crea uno con: echo 'GEMINI_API_KEY=tu_key' > .env"
     exit 1
 fi

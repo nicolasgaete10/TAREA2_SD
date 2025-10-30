@@ -94,20 +94,20 @@ services:
       - flink-jobmanager
 
   flink-quality-checker:
-    build: ./flink  # Construye la imagen del Dockerfile anterior
-    container_name: flink_job_submitter # Le cambié el nombre para más claridad
+    build: ./flink  
+    container_name: flink_job_submitter 
     depends_on:
       flink-jobmanager:
-        condition: service_started # Esperar a que el jobmanager inicie
+        condition: service_started 
     
     # Este es el nuevo comando. Se conecta al cluster y envía el job.
     command: >
       bash -c "
         echo '--- Esperando 20s a que Flink JobManager esté listo... ---';
         sleep 20;
-        echo '--- Enviando Job de PyFlink (quality_checker.py) al Cluster... ---';
+        echo '--- Enviando Job de PyFlink (flink.py) al Cluster... ---';
         flink run \
-          --python /opt/flink/usrlib/quality_checker.py \
+          --python /opt/flink/usrlib/flink.py \
           --jobmanager flink-jobmanager:8081
       "
     
