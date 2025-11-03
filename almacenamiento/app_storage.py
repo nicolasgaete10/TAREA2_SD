@@ -124,6 +124,22 @@ def log_cache_access():
         logger.info(f"Log cache recibido: {data.get('cache_policy')} - {data.get('traffic_distribution')} - {'HIT' if data.get('cache_hit') else 'MISS'}")
     return jsonify({"status": "success", "message": "Log recibido"})
 
+
+@app.route('/check', methods=['POST', 'GET'])
+def check_endpoint():
+    """Endpoint de compatibilidad para traffic_generator (evita 404 POST /check).
+    Responde con un 200 y un JSON simple para indicar que el servicio está vivo.
+    """
+    if request.method == 'POST':
+        # opcional: registrar el body si viene
+        try:
+            payload = request.get_json(silent=True)
+            if payload:
+                logger.info(f"/check recibido (POST) con payload: {payload}")
+        except Exception:
+            logger.debug("/check POST recibido sin JSON parseable")
+    return jsonify({"status": "ok", "service": "storage", "database_connected": db_connection is not None})
+
 @app.route('/cache_stats', methods=['GET'])
 def get_cache_stats():
     """Endpoint simple para estadísticas de cache"""

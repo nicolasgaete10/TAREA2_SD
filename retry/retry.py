@@ -76,25 +76,25 @@ def main():
             pregunta = data.get('pregunta', 'N/A')
             service_retry_count = data.get('service_retry_count', 0)
             
-            logger.warning(f"📨 Mensaje de reintento recibido: '{pregunta[:50]}...'")
-            logger.info(f"   Intento de servicio #{service_retry_count}")
+            logger.warning(f"Mensaje de reintento recibido: '{pregunta[:50]}...'")
+            logger.info(f"Intento de servicio #{service_retry_count}")
             
-            # --- EXPONENTIAL BACKOFF ---
+            # Exponential backoff
             delay = calculate_exponential_backoff(service_retry_count)
-            logger.info(f"⏰ Esperando {delay} segundos antes de re-encolar (exponential backoff)...")
+            logger.info(f"Esperando {delay} segundos antes de re-encolar (exponential backoff)...")
             time.sleep(delay)
             
-            # --- Re-enviar al tópico de preguntas pendientes ---
-            logger.info(f"🔄 Re-encolando pregunta en '{OUTPUT_TOPIC}'.")
+            # Re-enviar al tópico de preguntas pendientes
+            logger.info(f"Re-encolando pregunta en '{OUTPUT_TOPIC}'.")
             producer.send(OUTPUT_TOPIC, data)
             producer.flush()
             
     except KeyboardInterrupt:
-        logger.info("⚠️ Deteniendo retry worker...")
+        logger.info("Deteniendo retry worker...")
     finally:
         consumer.close()
         producer.close()
-        logger.info("👋 Retry Worker detenido.")
+        logger.info("Retry Worker detenido.")
 
 if __name__ == "__main__":
     main()

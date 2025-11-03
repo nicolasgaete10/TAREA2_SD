@@ -69,19 +69,19 @@ def connect_to_kafka():
                 bootstrap_servers=KAFKA_BROKER,
                 value_serializer=lambda v: json.dumps(v).encode('utf-8')
             )
-            log.info("✅ Conexión con Kafka exitosa.")
+            log.info("Conexión con Kafka exitosa.")
             return producer
         except NoBrokersAvailable:
-            log.warning(f"⚠️ No se pudo conectar a Kafka. Reintentando en 10 segundos... ({retries} intentos restantes)")
+            log.warning(f"No se pudo conectar a Kafka. Reintentando en 10 segundos... ({retries} intentos restantes)")
             retries -= 1
             time.sleep(10)
     
-    log.error("❌ No se pudo establecer conexión con Kafka. Saliendo.")
+    log.error("No se pudo establecer conexión con Kafka. Saliendo.")
     exit(1)
 
 def check_storage(pregunta):
     """
-    NUEVO: Consulta el almacenamiento para ver si la pregunta ya existe.
+    Consulta el almacenamiento para ver si la pregunta ya existe.
     
     Returns:
         dict o None: Datos si existe, None si no existe
@@ -97,22 +97,22 @@ def check_storage(pregunta):
         if response.status_code == 200:
             data = response.json()
             if data.get('exists'):
-                log.info(f"✅ CACHE HIT en BD: Pregunta ya procesada")
+                log.info(f"CACHE HIT en BD: Pregunta ya procesada")
                 stats['cache_hits'] += 1
                 return data.get('data')
         
-        log.info(f"❌ CACHE MISS en BD: Pregunta no encontrada")
+        log.info(f"CACHE MISS en BD: Pregunta no encontrada")
         stats['cache_misses'] += 1
         return None
         
     except Exception as e:
-        log.warning(f"⚠️ Error consultando almacenamiento: {e}. Asumiendo no existe.")
+        log.warning(f"Error consultando almacenamiento: {e}. Asumiendo no existe.")
         stats['cache_misses'] += 1
         return None
 
 def process_question(producer, question, best_answer):
     """
-    MODIFICADO: Procesa una pregunta según el flujo del PDF.
+    Procesa una pregunta según el flujo del PDF.
     
     1. Consulta almacenamiento
     2. Si existe → Usar esa respuesta (opcionalmente popular caché Redis)
@@ -125,7 +125,7 @@ def process_question(producer, question, best_answer):
     
     if existing_data:
         # La pregunta ya fue procesada, usar resultado existente
-        log.info(f"📊 Usando respuesta existente (Score: {existing_data.get('quality_score', 'N/A')})")
+        log.info(f"Usando respuesta existente (Score: {existing_data.get('quality_score', 'N/A')})")
         # Aquí podrías popular Redis si quisieras
         return
     
@@ -138,13 +138,13 @@ def process_question(producer, question, best_answer):
     
     try:
         producer.send(KAFKA_TOPIC, message)
-        log.info(f"📤 Mensaje enviado a '{KAFKA_TOPIC}': {question[:50]}...")
+        log.info(f"Mensaje enviado a '{KAFKA_TOPIC}': {question[:50]}...")
     except Exception as e:
-        log.error(f"❌ Error al enviar mensaje a Kafka: {e}")
+        log.error(f"Error al enviar mensaje a Kafka: {e}")
 
 def generate_uniform_traffic(producer, duration_sec):
     """Genera tráfico con tasa de arribo constante."""
-    log.info("🚀 Iniciando generación de tráfico UNIFORME (1 consulta cada 7 segundos).")
+    log.info("Iniciando generación de tráfico UNIFORME (1 consulta cada 7 segundos).")
     start_time = time.time()
     
     while time.time() - start_time < duration_sec:
@@ -157,7 +157,7 @@ def generate_uniform_traffic(producer, duration_sec):
 
 def generate_exponential_traffic(producer, duration_sec):
     """Genera tráfico con tasa de arribo variable (exponencial)."""
-    log.info("🚀 Iniciando generación de tráfico EXPONENCIAL (tasa media 7 seg).")
+    log.info("Iniciando generación de tráfico EXPONENCIAL (tasa media 7 seg).")
     start_time = time.time()
     
     while time.time() - start_time < duration_sec:
@@ -173,7 +173,7 @@ def generate_exponential_traffic(producer, duration_sec):
 def log_stats():
     """Muestra estadísticas de caché."""
     log.info("=" * 60)
-    log.info("📊 ESTADÍSTICAS FINALES")
+    log.info("ESTADÍSTICAS FINALES")
     log.info(f"Total de solicitudes: {stats['total_requests']}")
     log.info(f"Cache Hits (BD): {stats['cache_hits']}")
     log.info(f"Cache Misses (BD): {stats['cache_misses']}")
@@ -201,7 +201,7 @@ def main():
 
     # Iniciar simulación
     duration_sec = SIMULATION_TIME_MIN * 60
-    log.info(f"🎯 Iniciando simulación por {SIMULATION_TIME_MIN} minutos.")
+    log.info(f"Iniciando simulación por {SIMULATION_TIME_MIN} minutos.")
     
     try:
         if TRAFFIC_DISTRIBUTION == "uniform":
@@ -209,14 +209,14 @@ def main():
         elif TRAFFIC_DISTRIBUTION == "exponential":
             generate_exponential_traffic(producer, duration_sec)
         else:
-            log.warning(f"⚠️ Distribución '{TRAFFIC_DISTRIBUTION}' no reconocida. Usando 'uniforme'.")
+            log.warning(f"Distribución '{TRAFFIC_DISTRIBUTION}' no reconocida. Usando 'uniforme'.")
             generate_uniform_traffic(producer, duration_sec)
 
     except KeyboardInterrupt:
-        log.info("⚠️ Simulación detenida manualmente.")
+        log.info("Simulación detenida manualmente.")
         log_stats()
     finally:
-        log.info("🏁 Simulación terminada. Cerrando productor de Kafka.")
+        log.info("Simulación terminada. Cerrando productor de Kafka.")
         producer.flush()
         producer.close()
 

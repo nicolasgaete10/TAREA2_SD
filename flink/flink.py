@@ -27,7 +27,6 @@ OUTPUT_RETRY_TOPIC = os.environ.get('FLINK_OUTPUT_RETRY_TOPIC', 'preguntas_pendi
 QUALITY_THRESHOLD = float(os.environ.get('QUALITY_THRESHOLD', '0.3'))
 MAX_RETRIES = int(os.environ.get('MAX_RETRIES', '2'))
 
-# ⚠️ CAMBIO IMPORTANTE: Crear el OutputTag FUERA de la clase
 retry_output_tag = OutputTag("retry-output", Types.STRING())
 
 
@@ -51,14 +50,14 @@ class QualityCheckFunction(ProcessFunction):
 
             # 1. ¿Score suficientemente bueno?
             if score >= self.threshold:
-                logger.info(f"✅ APROBADO - Score {score:.4f} >= {self.threshold}")
+                logger.info(f"APROBADO - Score {score:.4f} >= {self.threshold}")
                 data['status'] = 'validated'
                 # Enviar al stream PRINCIPAL (validados)
                 yield json.dumps(data)
             
             # 2. Score bajo, pero aún quedan reintentos
             elif retry_count < self.max_retries:
-                logger.warning(f"⚠️ RECHAZADO - Score {score:.4f} < {self.threshold}. Reintento {retry_count + 1}/{self.max_retries}")
+                logger.warning(f"RECHAZADO - Score {score:.4f} < {self.threshold}. Reintento {retry_count + 1}/{self.max_retries}")
                 
                 # Preparar el mensaje para el reintento
                 retry_message = {
@@ -70,12 +69,12 @@ class QualityCheckFunction(ProcessFunction):
                     'reason': 'low_quality_score'
                 }
                 
-                # ⚠️ CAMBIO IMPORTANTE: Usar yield con tupla (tag, valor)
+                # Usar yield con tupla (tag, valor)
                 yield retry_output_tag, json.dumps(retry_message)
 
             # 3. Score bajo Y se agotaron los reintentos
             else:
-                logger.warning(f"🔴 LÍMITE ALCANZADO - Score {score:.4f}. Guardando de todas formas.")
+                logger.warning(f"LÍMITE ALCANZADO - Score {score:.4f}. Guardando de todas formas.")
                 data['status'] = 'validated_max_retries'
                 data['quality_warning'] = True
                 
@@ -83,18 +82,18 @@ class QualityCheckFunction(ProcessFunction):
                 yield json.dumps(data)
                 
         except Exception as e:
-            logger.error(f"❌ Error evaluando calidad: {e}", exc_info=True)
+            logger.error(f"Error evaluando calidad: {e}", exc_info=True)
 
 
 def run_flink_job():
     """Define y ejecuta el Job de PyFlink."""
     
-    logger.info("🚀 Iniciando Job de PyFlink Quality Checker...")
-    logger.info(f"📍 Kafka Broker: {KAFKA_BROKER}")
-    logger.info(f"📥 Input Topic: {INPUT_TOPIC}")
-    logger.info(f"📤 Output Validated: {OUTPUT_VALIDATED_TOPIC}")
-    logger.info(f"🔄 Output Retry: {OUTPUT_RETRY_TOPIC}")
-    logger.info(f"📊 Threshold: {QUALITY_THRESHOLD}, Max Retries: {MAX_RETRIES}")
+    logger.info("Iniciando Job de PyFlink Quality Checker...")
+    logger.info(f"Kafka Broker: {KAFKA_BROKER}")
+    logger.info(f"Input Topic: {INPUT_TOPIC}")
+    logger.info(f"Output Validated: {OUTPUT_VALIDATED_TOPIC}")
+    logger.info(f"Output Retry: {OUTPUT_RETRY_TOPIC}")
+    logger.info(f"Threshold: {QUALITY_THRESHOLD}, Max Retries: {MAX_RETRIES}")
     
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_parallelism(1)  # Para debugging, usar 1
@@ -135,7 +134,7 @@ def run_flink_job():
     # --- 3. Construir el Grafo de Flujo ---
     
     # Leer de Kafka
-    # ⚠️ CAMBIO: from_source requiere WatermarkStrategy
+    # from_source requiere WatermarkStrategy
     data_stream = env.from_source(
         kafka_source,
         WatermarkStrategy.no_watermarks(),
@@ -148,7 +147,7 @@ def run_flink_job():
         output_type=Types.STRING()
     ).name("Quality Check & Split")
 
-    # CAMBIO: Obtener el stream lateral usando el OutputTag creado fuera
+    # Obtener el stream lateral usando el OutputTag creado fuera
     retry_stream = processed_stream.get_side_output(retry_output_tag)
 
     # --- 4. Enviar los streams a sus Sinks ---
